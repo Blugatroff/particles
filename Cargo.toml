@@ -1,0 +1,29 @@
+[package]
+name = "particles"
+version = "0.1.0"
+authors = ["Jasper Reef <jasper.reef@gmx.de>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+winit = "0.22"
+cgmath = "0.17"
+env_logger = "0.7"
+log = "0.4"
+futures = "0.3"
+bytemuck = "1.4"
+image = "0.23"
+anyhow = "*"
+tobj = "*"
+rand = "*"
+rayon = "*"
+
+[dependencies.wgpu]
+version = "*"
+
+[build-dependencies]
+anyhow = "1.0"
+fs_extra = "1.1"
+glob = "0.3"
+shaderc = "0.6"
