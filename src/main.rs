@@ -1,4 +1,3 @@
-#![feature(clamp)]
 use futures::executor::block_on;
 use wgpu::util::DeviceExt;
 use winit::{
@@ -17,15 +16,12 @@ use state::*;
 use std::env;
 mod model;
 fn main() -> Result<()> {
-    #[cfg(target_arch = "wasm32")]
-    #[cfg(feature = "stdweb")]
     #[deny(unsafe_code)]
     env_logger::init();
     let args: Vec<String> = env::args().collect();
 
     let event_loop = EventLoop::new();
-    let window = WindowBuilder::new().build(&event_loop).unwrap();
-
+    let window = WindowBuilder::new().build(&event_loop)?;
     let mut is_focused = true;
     let num = {
         if args.len() > 1 {
@@ -55,6 +51,7 @@ fn main() -> Result<()> {
     let mut state = block_on(State::new(&window, num, g * 100000.0))?;
     window.set_cursor_grab(true).ok();
     window.set_cursor_visible(false);
+    window.set_title("particles");
     event_loop.run(move |event, _, control_flow| match event {
         Event::WindowEvent {
             ref event,

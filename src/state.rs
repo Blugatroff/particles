@@ -174,7 +174,7 @@ impl State {
                     limits: wgpu::Limits::default(),
                     shader_validation: true,
                 },
-                None, // Trace path
+                None,
             )
             .await
             .unwrap();
@@ -580,7 +580,7 @@ impl State {
                 })
             }
         } else {
-            self.particle_adding_value = self.particle_adding_value.clamp(std::i32::MIN, 0);
+            self.particle_adding_value = if self.particle_adding_value > 0 { 0 } else { self.particle_adding_value };
             self.particle_adding_value -= 1;
             for _ in 0..self.particle_adding_value {
                 self.particles.instances.pop();
