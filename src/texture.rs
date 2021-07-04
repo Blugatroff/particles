@@ -41,7 +41,7 @@ impl Texture {
             _ => "",
         };
         let start = std::time::Instant::now();
-        let img = img.clone().into_rgba();
+        let img = img.clone().into_rgba8();
         let dimensions = img.dimensions();
         let raw = img.into_raw();
         if format != "rgba8" {
