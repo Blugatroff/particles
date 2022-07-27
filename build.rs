@@ -67,7 +67,7 @@ fn main() -> Result<()> {
         let compiled = compiler.compile_into_spirv(
             &shader.src,
             shader.kind,
-            &shader.src_path.to_str().unwrap(),
+            shader.src_path.to_str().unwrap(),
             "main",
             None,
         )?;
@@ -77,6 +77,3 @@ fn main() -> Result<()> {
     Ok(())
 }
 
- 
-
- 

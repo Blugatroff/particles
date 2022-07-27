@@ -36,7 +36,6 @@ pub struct CameraController {
     pub mouse_sensitivity: f32,
     pub key_sensitivity: f32,
 }
-pub const PI: f32 = 3.14159;
 impl Camera {
     pub fn new(aspect: f32) -> Self {
         Camera {
@@ -77,8 +76,7 @@ impl Camera {
     pub fn build_view_projection_matrix(&self) -> cgmath::Matrix4<f32> {
         let view = cgmath::Matrix4::look_at(self.eye, self.target, self.up);
         let proj = cgmath::perspective(cgmath::Deg(self.fovy), self.aspect, self.znear, self.zfar);
-
-        return OPENGL_TO_WGPU_MATRIX * proj * view;
+        OPENGL_TO_WGPU_MATRIX * proj * view
     }
     #[rustfmt::skip]
     pub fn update(&mut self, delta_time: f32) {
@@ -91,7 +89,7 @@ impl Camera {
         if self.controller.look_up    { self.controller.pitch   += self.controller.key_sensitivity * delta_time ; }
 
         let clamp = |x: &mut f32, min: f32, max: f32| { if *x < min { *x = min } else if *x > max { *x = max } };
-        clamp(&mut self.controller.pitch, -PI / 2.0, PI / 2.0);
+        clamp(&mut self.controller.pitch, -std::f32::consts::PI / 2.0, std::f32::consts::PI  / 2.0);
 
         let direction = cgmath::Vector3::new(
             self.controller.pitch.cos() * self.controller.heading.sin(),
@@ -104,9 +102,9 @@ impl Camera {
             direction.z,
         ).normalize();
         let right: cgmath::Vector3<f32> = cgmath::Vector3::new(
-            (self.controller.heading - PI / 2.0).sin(),
+            (self.controller.heading - std::f32::consts::PI / 2.0).sin(),
             0.0,
-            (self.controller.heading - PI / 2.0).cos()
+            (self.controller.heading - std::f32::consts::PI / 2.0).cos()
         ).normalize();
 
         if self.controller.forward  { 
@@ -125,40 +123,35 @@ impl Camera {
         self.target = self.eye + direction;
     }
     pub fn process_events(&mut self, event: &WindowEvent){
-        match event {
-            #[rustfmt::skip]
-            WindowEvent::KeyboardInput { input, .. } => match input {
-                KeyboardInput {
-                    virtual_keycode,
-                    state,
-                    ..
-                } => match (state, virtual_keycode) {
-                    (ElementState::Pressed , Some(VirtualKeyCode::D       ))  => { self.controller.right      = true ; }
-                    (ElementState::Released, Some(VirtualKeyCode::D       ))  => { self.controller.right      = false; }
-                    (ElementState::Pressed , Some(VirtualKeyCode::A       ))  => { self.controller.left       = true ; }
-                    (ElementState::Released, Some(VirtualKeyCode::A       ))  => { self.controller.left       = false; }
-                    (ElementState::Pressed , Some(VirtualKeyCode::LControl))  => { self.controller.down       = true ; }
-                    (ElementState::Released, Some(VirtualKeyCode::LControl))  => { self.controller.down       = false; }
-                    (ElementState::Pressed , Some(VirtualKeyCode::Space   ))  => { self.controller.up         = true ; }
-                    (ElementState::Released, Some(VirtualKeyCode::Space   ))  => { self.controller.up         = false; }
-                    (ElementState::Pressed , Some(VirtualKeyCode::W       ))  => { self.controller.forward    = true ; }
-                    (ElementState::Released, Some(VirtualKeyCode::W       ))  => { self.controller.forward    = false; }
-                    (ElementState::Pressed , Some(VirtualKeyCode::S       ))  => { self.controller.backward   = true ; }
-                    (ElementState::Released, Some(VirtualKeyCode::S       ))  => { self.controller.backward   = false; }
-                    (ElementState::Pressed , Some(VirtualKeyCode::Left    ))  => { self.controller.look_right = true ; }
-                    (ElementState::Released, Some(VirtualKeyCode::Left    ))  => { self.controller.look_right = false; }
-                    (ElementState::Pressed , Some(VirtualKeyCode::Right   ))  => { self.controller.look_left  = true ; }
-                    (ElementState::Released, Some(VirtualKeyCode::Right   ))  => { self.controller.look_left  = false; }
-                    (ElementState::Pressed , Some(VirtualKeyCode::Down    ))  => { self.controller.look_down  = true ; }
-                    (ElementState::Released, Some(VirtualKeyCode::Down    ))  => { self.controller.look_down  = false; }
-                    (ElementState::Pressed , Some(VirtualKeyCode::Up      ))  => { self.controller.look_up    = true ; }
-                    (ElementState::Released, Some(VirtualKeyCode::Up      ))  => { self.controller.look_up    = false; }
-                    (ElementState::Pressed , Some(VirtualKeyCode::LShift  ))  => { self.controller.speed     *= 2.0  ; }
-                    (ElementState::Released, Some(VirtualKeyCode::LShift  ))  => { self.controller.speed     /= 2.0  ; }
-                    _ => {}
-                },
-            },
-            _ => {},
-        }
+        if let WindowEvent::KeyboardInput { input, .. } = event { let KeyboardInput {
+                virtual_keycode,
+                state,
+                ..
+            } = input;
+        match (state, virtual_keycode) {
+            (ElementState::Pressed , Some(VirtualKeyCode::D       ))  => { self.controller.right      = true ; }
+            (ElementState::Released, Some(VirtualKeyCode::D       ))  => { self.controller.right      = false; }
+            (ElementState::Pressed , Some(VirtualKeyCode::A       ))  => { self.controller.left       = true ; }
+            (ElementState::Released, Some(VirtualKeyCode::A       ))  => { self.controller.left       = false; }
+            (ElementState::Pressed , Some(VirtualKeyCode::LControl))  => { self.controller.down       = true ; }
+            (ElementState::Released, Some(VirtualKeyCode::LControl))  => { self.controller.down       = false; }
+            (ElementState::Pressed , Some(VirtualKeyCode::Space   ))  => { self.controller.up         = true ; }
+            (ElementState::Released, Some(VirtualKeyCode::Space   ))  => { self.controller.up         = false; }
+            (ElementState::Pressed , Some(VirtualKeyCode::W       ))  => { self.controller.forward    = true ; }
+            (ElementState::Released, Some(VirtualKeyCode::W       ))  => { self.controller.forward    = false; }
+            (ElementState::Pressed , Some(VirtualKeyCode::S       ))  => { self.controller.backward   = true ; }
+            (ElementState::Released, Some(VirtualKeyCode::S       ))  => { self.controller.backward   = false; }
+            (ElementState::Pressed , Some(VirtualKeyCode::Left    ))  => { self.controller.look_right = true ; }
+            (ElementState::Released, Some(VirtualKeyCode::Left    ))  => { self.controller.look_right = false; }
+            (ElementState::Pressed , Some(VirtualKeyCode::Right   ))  => { self.controller.look_left  = true ; }
+            (ElementState::Released, Some(VirtualKeyCode::Right   ))  => { self.controller.look_left  = false; }
+            (ElementState::Pressed , Some(VirtualKeyCode::Down    ))  => { self.controller.look_down  = true ; }
+            (ElementState::Released, Some(VirtualKeyCode::Down    ))  => { self.controller.look_down  = false; }
+            (ElementState::Pressed , Some(VirtualKeyCode::Up      ))  => { self.controller.look_up    = true ; }
+            (ElementState::Released, Some(VirtualKeyCode::Up      ))  => { self.controller.look_up    = false; }
+            (ElementState::Pressed , Some(VirtualKeyCode::LShift  ))  => { self.controller.speed     *= 2.0  ; }
+            (ElementState::Released, Some(VirtualKeyCode::LShift  ))  => { self.controller.speed     /= 2.0  ; }
+            _ => {}
+        }; }
     }
 }

@@ -27,10 +27,7 @@ fn main() -> Result<()> {
         if args.len() > 1 {
             let num = args[1].parse::<i32>();
             println!("{:?}", num);
-            match num {
-                Ok(n) => n,
-                Err(_) => 1000,
-            }
+            num.unwrap_or(1000)
         } else {
             1000
         }
@@ -39,10 +36,7 @@ fn main() -> Result<()> {
         if args.len() > 2 {
             let g = args[2].parse::<f32>();
             println!("{:?}", g);
-            match g {
-                Ok(g) => g,
-                Err(_) => 1.0,
-            }
+            g.unwrap_or(1.0)
         } else {
             1.0
         }
@@ -70,14 +64,15 @@ fn main() -> Result<()> {
                         is_focused = false;
                     }
                     WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
-                    WindowEvent::KeyboardInput { input, .. } => match input {
-                        KeyboardInput {
-                            state: ElementState::Pressed,
-                            virtual_keycode: Some(VirtualKeyCode::Escape),
-                            ..
-                        } => *control_flow = ControlFlow::Exit,
-                        _ => {}
-                    },
+                    WindowEvent::KeyboardInput {
+                        input:
+                            KeyboardInput {
+                                state: ElementState::Pressed,
+                                virtual_keycode: Some(VirtualKeyCode::Escape),
+                                ..
+                            },
+                        ..
+                    } => *control_flow = ControlFlow::Exit,
                     WindowEvent::Resized(physical_size) => {
                         state.resize(*physical_size);
                     }

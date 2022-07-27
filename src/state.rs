@@ -12,6 +12,10 @@ use model::*;
 use rayon::prelude::*;
 use winit::window::Window;
 
+fn align_to(n: u64, alignment: u64) -> u64 {
+    n + (n % alignment)
+}
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct Uniforms {
@@ -80,7 +84,7 @@ struct MassInstance {
     scale: f32,
 }
 impl MassInstance {
-    fn to_raw(&self) -> InstanceRaw {
+    fn into_raw(self) -> InstanceRaw {
         InstanceRaw {
             /* life_time: self.life_time, */
             model: cgmath::Matrix4::from_translation(self.position)
@@ -121,7 +125,7 @@ impl PipePackage {
             .collect();
         let data_size = (data.len() * std::mem::size_of::<InstanceRaw>()) as u64;
         if data_size > self.binding.buffer_size {
-            let buffer_size = data_size * 3 / 2;
+            let buffer_size = align_to(data_size * 3 / 2, 4);
             self.binding.buffer_size = buffer_size;
             self.binding.buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Instance Buffer"),
@@ -133,11 +137,11 @@ impl PipePackage {
                 layout: &self.binding.bind_group_layout,
                 entries: &[wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::Buffer {
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: &self.binding.buffer,
                         offset: 0,
                         size: NonZeroU64::new(self.binding.buffer_size),
-                    },
+                    }),
                 }],
                 label: Some("instance_bind_group"),
             });
@@ -156,8 +160,9 @@ impl PipePackage {
             .collect();
         let data_size = (data.len() * std::mem::size_of::<DataRaw>()) as u64;
         if data_size > self.data_binding.buffer_size {
-            let buffer_size = data_size * 3 / 2;
+            let buffer_size = align_to(data_size * 3 / 2, 4);
             self.data_binding.buffer_size = buffer_size;
+
             self.data_binding.buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Instance Buffer"),
                 size: buffer_size,
@@ -168,11 +173,11 @@ impl PipePackage {
                 layout: &self.data_binding.bind_group_layout,
                 entries: &[wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::Buffer {
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: &self.data_binding.buffer,
                         offset: 0,
                         size: NonZeroU64::new(self.data_binding.buffer_size),
-                    },
+                    }),
                 }],
                 label: Some("instance_bind_group"),
             });
@@ -205,6 +210,7 @@ pub struct State {
     avg_speed_last_frame: f32,
     g: f32,
     particle_adding_value: i32,
+    print: bool,
 }
 impl State {
     pub async fn new(window: &Window, particle_number: i32, g: f32) -> Result<Self> {
@@ -269,11 +275,11 @@ impl State {
             layout: &uniform_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::Buffer {
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &uniform_buffer,
                     offset: 0,
                     size: NonZeroU64::new(std::mem::size_of::<Uniforms>() as u64),
-                },
+                }),
             }],
             label: Some("uniform_bind_group"),
         });
@@ -364,13 +370,13 @@ impl State {
             layout: &instance_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::Buffer {
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &instance_buffer,
                     offset: 0,
                     size: NonZeroU64::new(
                         (instance_data.len() * std::mem::size_of::<InstanceRaw>()) as u64,
                     ),
-                },
+                }),
             }],
             label: Some("instance_bind_group"),
         });
@@ -410,11 +416,11 @@ impl State {
             layout: &instance_data_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::Buffer {
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &instance_data_buffer,
                     offset: 0,
                     size: NonZeroU64::new(instance_data_size as u64),
-                },
+                }),
             }],
             label: Some("instance_data_bind_group"),
         });
@@ -445,8 +451,7 @@ impl State {
         let vertex_buffer_layouts = &[Vertex::desc()];
         let color_targets = &[wgpu::ColorTargetState {
             format: wgpu::TextureFormat::Bgra8UnormSrgb,
-            alpha_blend: wgpu::BlendState::REPLACE,
-            color_blend: wgpu::BlendState::REPLACE,
+            blend: None,
             write_mask: wgpu::ColorWrite::ALL,
         }];
         let render_pipeline = create_render_pipeline(
@@ -474,12 +479,13 @@ impl State {
                     cgmath::Vector3::new(0.0, 1.0, 0.0),
                     cgmath::Deg(0.0),
                 ),
-                scale: 5 as f32 / 100.0,
+                scale: 5.0 / 100.0,
             });
         }
         let mass_instances_data = mass_instances
             .iter()
-            .map(MassInstance::to_raw)
+            .copied()
+            .map(MassInstance::into_raw)
             .collect::<Vec<_>>();
         let mass_instance_size = mass_instances_data.len() * std::mem::size_of::<InstanceRaw>();
         let mass_instances_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -505,11 +511,11 @@ impl State {
             layout: &mass_instances_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::Buffer {
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &mass_instances_buffer,
                     size: NonZeroU64::new(mass_instance_size as u64),
                     offset: 0,
-                },
+                }),
             }],
             label: Some("instance_bind_group"),
         });
@@ -535,8 +541,7 @@ impl State {
         let vertex_buffer_layouts = &[Vertex::desc()];
         let color_targets = &[wgpu::ColorTargetState {
             format: wgpu::TextureFormat::Bgra8UnormSrgb,
-            alpha_blend: wgpu::BlendState::REPLACE,
-            color_blend: wgpu::BlendState::REPLACE,
+            blend: None,
             write_mask: wgpu::ColorWrite::ALL,
         }];
         let mass_pipeline = create_render_pipeline(
@@ -549,6 +554,7 @@ impl State {
             Some("MASS PIPELINE"),
         );
         Ok(Self {
+            print: false,
             surface,
             device,
             queue,
@@ -588,25 +594,23 @@ impl State {
             texture::Texture::create_depth_texture(&self.device, &self.sc_desc, "depth_texture");
     }
     pub fn device_input(&mut self, event: &DeviceEvent) {
-        match event {
-            winit::event::DeviceEvent::MouseMotion { delta } => {
-                self.camera.controller.heading +=
-                    delta.0 as f32 * -self.camera.controller.mouse_sensitivity;
-                self.camera.controller.pitch +=
-                    delta.1 as f32 * -self.camera.controller.mouse_sensitivity;
-            }
-            _ => {}
+        if let winit::event::DeviceEvent::MouseMotion { delta } = event {
+            self.camera.controller.heading +=
+                delta.0 as f32 * -self.camera.controller.mouse_sensitivity;
+            self.camera.controller.pitch +=
+                delta.1 as f32 * -self.camera.controller.mouse_sensitivity;
         }
     }
     pub fn input(&mut self, event: &WindowEvent) -> bool {
         self.camera.process_events(event);
         match event {
-            WindowEvent::KeyboardInput { input, .. } => match input {
-                KeyboardInput {
+            WindowEvent::KeyboardInput { input, .. } => {
+                let KeyboardInput {
                     virtual_keycode,
                     state,
                     ..
-                } => match (state, virtual_keycode) {
+                } = input;
+                match (state, virtual_keycode) {
                     (ElementState::Pressed, Some(VirtualKeyCode::R)) => {
                         self.reset();
                     }
@@ -639,9 +643,12 @@ impl State {
                                 instance.velocity += acceleration;
                             });
                     }
+                    (state, Some(VirtualKeyCode::P)) => {
+                        self.print = *state == ElementState::Pressed;
+                    }
                     _ => {}
-                },
-            },
+                };
+            }
             _ => return false,
         }
         true
@@ -653,17 +660,19 @@ impl State {
         self.last_time = std::time::Instant::now();
         self.camera.update(delta_time);
         self.uniforms.update_view_proj(&self.camera);
-        self.queue.write_buffer(
-            &self.uniform_binding.buffer,
-            0,
-            bytemuck::cast_slice(&[self.uniforms]),
-        );
-        println!(
-            "{}, particle_num: {}, frametime: {}",
-            if delta_time < MAXFRAMETIME { "+" } else { "-" },
-            self.particles.instances.len(),
-            delta_time,
-        );
+        let data = &[self.uniforms];
+        let data = bytemuck::cast_slice(data);
+        self.queue
+            .write_buffer(&self.uniform_binding.buffer, 0, data);
+        if self.print {
+            println!(
+                "{}, particle_num: {}, frametime: {}, pos: {:?}",
+                if delta_time < MAXFRAMETIME { "+" } else { "-" },
+                self.particles.instances.len(),
+                delta_time,
+                self.camera.eye
+            );
+        }
         use rand::Rng;
         let mut rng = rand::thread_rng();
         let init_vel = 0.5;
@@ -704,7 +713,7 @@ impl State {
             self.masses.instances[i].position.z =
                 (self.test_angle / (i + 1) as f32).sin() * l * i as f32;
         }
-        self.test_angle += 1.0 / 3.14159 * delta_time;
+        self.test_angle += 1.0 / std::f32::consts::PI * delta_time;
 
         let mut sum = 0.0;
         let mass_instances = &self.masses.instances;
@@ -716,7 +725,7 @@ impl State {
                 for mass in mass_instances {
                     let delta: cgmath::Vector3<f32> = mass.position - instance.position;
                     let scalar = (1.0 / delta.magnitude())
-                        * (0.5236 * mass.scale.powf(3.0))
+                        * (std::f32::consts::FRAC_PI_6 * mass.scale.powf(3.0))
                         * g
                         * delta_time;
                     let acceleration = cgmath::Vector3 {
@@ -742,13 +751,11 @@ impl State {
             .masses
             .instances
             .iter()
-            .map(|instance| instance.to_raw())
+            .map(|instance| instance.into_raw())
             .collect();
-        self.queue.write_buffer(
-            &self.masses.binding.buffer,
-            0,
-            bytemuck::cast_slice(&mass_instance_data),
-        );
+        let data = bytemuck::cast_slice(&mass_instance_data);
+        self.queue
+            .write_buffer(&self.masses.binding.buffer, 0, data);
     }
 
     pub fn render(&mut self) {
@@ -765,16 +772,16 @@ impl State {
             });
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-                    attachment: &frame.view,
+                color_attachments: &[wgpu::RenderPassColorAttachment {
+                    view: &frame.view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: true,
                     },
                 }],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachmentDescriptor {
-                    attachment: &self.depth_texture.view,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture.view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: true,
@@ -855,8 +862,10 @@ fn create_render_pipeline(
             topology: wgpu::PrimitiveTopology::TriangleList,
             strip_index_format: None,
             front_face: wgpu::FrontFace::Ccw,
-            cull_mode: wgpu::CullMode::None,
+            cull_mode: None,
             polygon_mode: wgpu::PolygonMode::Fill,
+            clamp_depth: false,
+            conservative: false,
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
@@ -879,7 +888,6 @@ fn create_render_pipeline(
                 write_mask: !0,
             },
             bias: wgpu::DepthBiasState::default(),
-            clamp_depth: false,
         }),
         multisample: wgpu::MultisampleState {
             count: 1,
