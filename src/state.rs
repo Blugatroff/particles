@@ -4,6 +4,8 @@ const DRAG: f32 = 0.01;
 const BOOMPOWER: f32 = 1.0;
 const MAXFRAMETIME: f32 = 1.0 / 60.0;
 
+use std::num::NonZeroU64;
+
 use super::*;
 use anyhow::*;
 use model::*;
@@ -90,6 +92,7 @@ impl MassInstance {
 
 struct Binding {
     buffer: wgpu::Buffer,
+    buffer_size: u64,
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
 }
@@ -101,6 +104,7 @@ struct PipePackage {
     data_binding: Binding,
     instances: Vec<ParticleInstance>,
 }
+
 struct PipePackageMass {
     pipeline: wgpu::RenderPipeline,
     model: Model,
@@ -109,30 +113,77 @@ struct PipePackageMass {
 }
 
 impl PipePackage {
-    fn refresh(&mut self, device: &wgpu::Device) {
+    fn refresh(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let data: Vec<InstanceRaw> = self
             .instances
             .iter()
             .map(|instance| instance.to_raw())
             .collect();
-        self.binding.buffer =
-            device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Instance Buffer"),
-                    contents: bytemuck::cast_slice(&data),
-                    usage: wgpu::BufferUsage::STORAGE | wgpu::BufferUsage::COPY_DST,
-                });
-        self.binding.bind_group =
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let data_size = (data.len() * std::mem::size_of::<InstanceRaw>()) as u64;
+        if data_size > self.binding.buffer_size {
+            let buffer_size = data_size * 3 / 2;
+            self.binding.buffer_size = buffer_size;
+            self.binding.buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Instance Buffer"),
+                size: buffer_size,
+                usage: wgpu::BufferUsage::STORAGE | wgpu::BufferUsage::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.binding.bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 layout: &self.binding.bind_group_layout,
                 entries: &[wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::Buffer(
-                        self.binding.buffer.slice(..),
-                    ),
+                    resource: wgpu::BindingResource::Buffer {
+                        buffer: &self.binding.buffer,
+                        offset: 0,
+                        size: NonZeroU64::new(self.binding.buffer_size),
+                    },
                 }],
                 label: Some("instance_bind_group"),
             });
+        }
+        unsafe {
+            queue.write_buffer(
+                &self.binding.buffer,
+                0,
+                std::slice::from_raw_parts(data.as_ptr() as *const u8, data_size as usize),
+            );
+        }
+        let data: Vec<DataRaw> = self
+            .instances
+            .iter()
+            .map(|instance| instance.to_data())
+            .collect();
+        let data_size = (data.len() * std::mem::size_of::<DataRaw>()) as u64;
+        if data_size > self.data_binding.buffer_size {
+            let buffer_size = data_size * 3 / 2;
+            self.data_binding.buffer_size = buffer_size;
+            self.data_binding.buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Instance Buffer"),
+                size: buffer_size,
+                usage: wgpu::BufferUsage::STORAGE | wgpu::BufferUsage::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.data_binding.bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                layout: &self.data_binding.bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer {
+                        buffer: &self.data_binding.buffer,
+                        offset: 0,
+                        size: NonZeroU64::new(self.data_binding.buffer_size),
+                    },
+                }],
+                label: Some("instance_bind_group"),
+            });
+        }
+        unsafe {
+            queue.write_buffer(
+                &self.data_binding.buffer,
+                0,
+                std::slice::from_raw_parts(data.as_ptr() as *const u8, data_size as usize),
+            );
+        }
     }
 }
 
@@ -161,7 +212,7 @@ impl State {
         let surface = unsafe { instance.create_surface(window) };
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::Default,
+                power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
             })
             .await
@@ -172,7 +223,7 @@ impl State {
                 &wgpu::DeviceDescriptor {
                     features: wgpu::Features::empty(),
                     limits: wgpu::Limits::default(),
-                    shader_validation: true,
+                    label: None,
                 },
                 None,
             )
@@ -181,7 +232,7 @@ impl State {
 
         let window_size = window.inner_size();
         let sc_desc = wgpu::SwapChainDescriptor {
-            usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
+            usage: wgpu::TextureUsage::RENDER_ATTACHMENT,
             format: wgpu::TextureFormat::Bgra8UnormSrgb,
             width: window_size.width,
             height: window_size.height,
@@ -204,9 +255,10 @@ impl State {
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStage::VERTEX,
-                    ty: wgpu::BindingType::UniformBuffer {
-                        dynamic: false,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
                         min_binding_size: None,
+                        has_dynamic_offset: false,
                     },
                     count: None,
                 }],
@@ -217,7 +269,11 @@ impl State {
             layout: &uniform_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::Buffer(uniform_buffer.slice(..)),
+                resource: wgpu::BindingResource::Buffer {
+                    buffer: &uniform_buffer,
+                    offset: 0,
+                    size: NonZeroU64::new(std::mem::size_of::<Uniforms>() as u64),
+                },
             }],
             label: Some("uniform_bind_group"),
         });
@@ -225,6 +281,7 @@ impl State {
             buffer: uniform_buffer,
             bind_group_layout: uniform_bind_group_layout,
             bind_group: uniform_bind_group,
+            buffer_size: std::mem::size_of::<Uniforms>() as u64,
         };
         let depth_texture =
             texture::Texture::create_depth_texture(&device, &sc_desc, "depth_texture");
@@ -234,17 +291,20 @@ impl State {
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
                         visibility: wgpu::ShaderStage::FRAGMENT,
-                        ty: wgpu::BindingType::SampledTexture {
+                        ty: wgpu::BindingType::Texture {
                             multisampled: false,
-                            dimension: wgpu::TextureViewDimension::D2,
-                            component_type: wgpu::TextureComponentType::Uint,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
                         },
                         count: None,
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStage::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler { comparison: false },
+                        ty: wgpu::BindingType::Sampler {
+                            comparison: false,
+                            filtering: true,
+                        },
                         count: None,
                     },
                 ],
@@ -275,8 +335,10 @@ impl State {
                 velocity: cgmath::Vector3::new(0.0, 0.0, 0.0),
             });
         }
-        let instance_data: Vec<InstanceRaw> =
-            instances.iter().map(ParticleInstance::to_raw).collect::<Vec<_>>();
+        let instance_data: Vec<InstanceRaw> = instances
+            .iter()
+            .map(ParticleInstance::to_raw)
+            .collect::<Vec<_>>();
         let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Instance Buffer"),
             contents: bytemuck::cast_slice(&instance_data),
@@ -288,10 +350,10 @@ impl State {
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStage::VERTEX,
-                    ty: wgpu::BindingType::StorageBuffer {
-                        dynamic: false,
-                        readonly: true,
+                    ty: wgpu::BindingType::Buffer {
                         min_binding_size: None,
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
                     },
                     count: None,
                 }],
@@ -302,11 +364,21 @@ impl State {
             layout: &instance_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::Buffer(instance_buffer.slice(..)),
+                resource: wgpu::BindingResource::Buffer {
+                    buffer: &instance_buffer,
+                    offset: 0,
+                    size: NonZeroU64::new(
+                        (instance_data.len() * std::mem::size_of::<InstanceRaw>()) as u64,
+                    ),
+                },
             }],
             label: Some("instance_bind_group"),
         });
-        let instance_data_data = instances.iter().map(ParticleInstance::to_data).collect::<Vec<_>>();
+        let instance_data_data = instances
+            .iter()
+            .map(ParticleInstance::to_data)
+            .collect::<Vec<_>>();
+        let instance_data_size = instance_data_data.len() * std::mem::size_of::<DataRaw>();
         let instance_data_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Instance Buffer"),
             contents: bytemuck::cast_slice(&instance_data_data),
@@ -316,6 +388,7 @@ impl State {
             buffer: instance_buffer,
             bind_group_layout: instance_bind_group_layout,
             bind_group: instance_bind_group,
+            buffer_size: (instance_data.len() * std::mem::size_of::<InstanceRaw>()) as u64,
         };
 
         let instance_data_bind_group_layout =
@@ -323,10 +396,10 @@ impl State {
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStage::VERTEX | wgpu::ShaderStage::FRAGMENT,
-                    ty: wgpu::BindingType::StorageBuffer {
-                        dynamic: false,
-                        readonly: true,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         min_binding_size: None,
+                        has_dynamic_offset: false,
                     },
                     count: None,
                 }],
@@ -337,7 +410,11 @@ impl State {
             layout: &instance_data_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::Buffer(instance_data_buffer.slice(..)),
+                resource: wgpu::BindingResource::Buffer {
+                    buffer: &instance_data_buffer,
+                    offset: 0,
+                    size: NonZeroU64::new(instance_data_size as u64),
+                },
             }],
             label: Some("instance_data_bind_group"),
         });
@@ -345,12 +422,13 @@ impl State {
             buffer: instance_data_buffer,
             bind_group_layout: instance_data_bind_group_layout,
             bind_group: instance_data_bind_group,
+            buffer_size: instance_data_size as u64,
         };
 
         let vs_module =
-            device.create_shader_module(wgpu::include_spirv!("shaders/particle_shader.vert.spv"));
+            device.create_shader_module(&wgpu::include_spirv!("shaders/particle_shader.vert.spv"));
         let fs_module =
-            device.create_shader_module(wgpu::include_spirv!("shaders/particle_shader.frag.spv"));
+            device.create_shader_module(&wgpu::include_spirv!("shaders/particle_shader.frag.spv"));
 
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -364,12 +442,21 @@ impl State {
                 push_constant_ranges: &[],
             });
 
+        let vertex_buffer_layouts = &[Vertex::desc()];
+        let color_targets = &[wgpu::ColorTargetState {
+            format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            alpha_blend: wgpu::BlendState::REPLACE,
+            color_blend: wgpu::BlendState::REPLACE,
+            write_mask: wgpu::ColorWrite::ALL,
+        }];
         let render_pipeline = create_render_pipeline(
             &device,
             render_pipeline_layout,
             vs_module,
             fs_module,
-            &sc_desc,
+            vertex_buffer_layouts,
+            color_targets,
+            Some("Particle Pipeline"),
         );
 
         let mass = model::Model::load(
@@ -388,13 +475,13 @@ impl State {
                     cgmath::Deg(0.0),
                 ),
                 scale: 5 as f32 / 100.0,
-                //velocity: cgmath::Vector3::new(0.0, 0.0, 0.0),
             });
         }
         let mass_instances_data = mass_instances
             .iter()
             .map(MassInstance::to_raw)
             .collect::<Vec<_>>();
+        let mass_instance_size = mass_instances_data.len() * std::mem::size_of::<InstanceRaw>();
         let mass_instances_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Instance Buffer"),
             contents: bytemuck::cast_slice(&mass_instances_data),
@@ -405,10 +492,10 @@ impl State {
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStage::VERTEX,
-                    ty: wgpu::BindingType::StorageBuffer {
-                        dynamic: false,
-                        readonly: true,
+                    ty: wgpu::BindingType::Buffer {
                         min_binding_size: None,
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
                     },
                     count: None,
                 }],
@@ -418,7 +505,11 @@ impl State {
             layout: &mass_instances_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::Buffer(mass_instances_buffer.slice(..)),
+                resource: wgpu::BindingResource::Buffer {
+                    buffer: &mass_instances_buffer,
+                    size: NonZeroU64::new(mass_instance_size as u64),
+                    offset: 0,
+                },
             }],
             label: Some("instance_bind_group"),
         });
@@ -426,6 +517,7 @@ impl State {
             buffer: mass_instances_buffer,
             bind_group_layout: mass_instances_bind_group_layout,
             bind_group: mass_instances_bind_group,
+            buffer_size: mass_instance_size as u64,
         };
         let mass_pipe_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Light Pipeline"),
@@ -437,11 +529,25 @@ impl State {
             push_constant_ranges: &[],
         });
         let vs_module =
-            device.create_shader_module(wgpu::include_spirv!("shaders/mass_shader.vert.spv"));
+            device.create_shader_module(&wgpu::include_spirv!("shaders/mass_shader.vert.spv"));
         let fs_module =
-            device.create_shader_module(wgpu::include_spirv!("shaders/mass_shader.frag.spv"));
-        let mass_pipeline =
-            create_render_pipeline(&device, mass_pipe_layout, vs_module, fs_module, &sc_desc);
+            device.create_shader_module(&wgpu::include_spirv!("shaders/mass_shader.frag.spv"));
+        let vertex_buffer_layouts = &[Vertex::desc()];
+        let color_targets = &[wgpu::ColorTargetState {
+            format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            alpha_blend: wgpu::BlendState::REPLACE,
+            color_blend: wgpu::BlendState::REPLACE,
+            write_mask: wgpu::ColorWrite::ALL,
+        }];
+        let mass_pipeline = create_render_pipeline(
+            &device,
+            mass_pipe_layout,
+            vs_module,
+            fs_module,
+            vertex_buffer_layouts,
+            color_targets,
+            Some("MASS PIPELINE"),
+        );
         Ok(Self {
             surface,
             device,
@@ -453,7 +559,7 @@ impl State {
                 model,
                 binding: instances_binding,
                 data_binding: instance_data_binding,
-                instances: instances,
+                instances,
             },
             camera,
             uniforms,
@@ -580,7 +686,11 @@ impl State {
                 })
             }
         } else {
-            self.particle_adding_value = if self.particle_adding_value > 0 { 0 } else { self.particle_adding_value };
+            self.particle_adding_value = if self.particle_adding_value > 0 {
+                0
+            } else {
+                self.particle_adding_value
+            };
             self.particle_adding_value -= 1;
             for _ in 0..self.particle_adding_value {
                 self.particles.instances.pop();
@@ -627,35 +737,10 @@ impl State {
         });
         self.avg_speed_last_frame = sum / self.particles.instances.len() as f32;
 
-        self.particles.refresh(&self.device);
-
-        let instance_data_data: Vec<DataRaw> = self
-            .particles
-            .instances
-            .iter()
-            .map(|instance| instance.to_data())
-            .collect();
-        self.particles.data_binding.buffer =
-            self.device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("Instance Buffer"),
-                    contents: bytemuck::cast_slice(&instance_data_data),
-                    usage: wgpu::BufferUsage::STORAGE | wgpu::BufferUsage::COPY_DST,
-                });
-        self.particles.data_binding.bind_group =
-            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                layout: &self.particles.data_binding.bind_group_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer(
-                        self.particles.data_binding.buffer.slice(..),
-                    ),
-                }],
-                label: Some("instance_bind_group"),
-            });
-
+        self.particles.refresh(&self.device, &self.queue);
         let mass_instance_data: Vec<InstanceRaw> = self
-            .masses.instances
+            .masses
+            .instances
             .iter()
             .map(|instance| instance.to_raw())
             .collect();
@@ -696,13 +781,15 @@ impl State {
                     }),
                     stencil_ops: None,
                 }),
+                label: None,
             });
 
             render_pass.set_pipeline(&self.particles.pipeline);
             for mesh in &self.particles.model.meshes {
                 let material = &self.particles.model.materials[mesh.material];
                 render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                render_pass.set_index_buffer(mesh.index_buffer.slice(..));
+                render_pass
+                    .set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 render_pass.set_bind_group(0, &material.bind_group, &[]);
                 render_pass.set_bind_group(1, &self.uniform_binding.bind_group, &[]);
                 render_pass.set_bind_group(2, &self.particles.binding.bind_group, &[]);
@@ -717,14 +804,15 @@ impl State {
             for mesh in &self.masses.model.meshes {
                 let material = &self.masses.model.materials[mesh.material];
                 render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-                render_pass.set_index_buffer(mesh.index_buffer.slice(..));
+                render_pass
+                    .set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 render_pass.set_bind_group(0, &material.bind_group, &[]);
                 render_pass.set_bind_group(1, &self.uniform_binding.bind_group, &[]);
                 render_pass.set_bind_group(2, &self.masses.binding.bind_group, &[]);
                 render_pass.draw_indexed(
                     0..mesh.num_elements,
                     0,
-                    0..self.particles.instances.len() as u32,
+                    0..self.masses.instances.len() as u32,
                 );
             }
         }
@@ -735,9 +823,6 @@ impl State {
             .instances
             .par_iter_mut()
             .for_each(|instance| {
-                /* instance.position.x = 0.0;
-                instance.position.y = 0.0;
-                instance.position.z = 0.0; */
                 instance.velocity.x = 0.0;
                 instance.velocity.y = 0.0;
                 instance.velocity.z = 0.0;
@@ -749,46 +834,57 @@ fn create_render_pipeline(
     layout: wgpu::PipelineLayout,
     vs_module: wgpu::ShaderModule,
     fs_module: wgpu::ShaderModule,
-    sc_desc: &wgpu::SwapChainDescriptor,
+    vertex_buffer_layouts: &[wgpu::VertexBufferLayout],
+    color_targets: &[wgpu::ColorTargetState],
+    label: Option<&'static str>,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Render Pipeline"),
+        label,
         layout: Some(&layout),
-        vertex_stage: wgpu::ProgrammableStageDescriptor {
+        vertex: wgpu::VertexState {
             module: &vs_module,
             entry_point: "main",
+            buffers: vertex_buffer_layouts,
         },
-        fragment_stage: Some(wgpu::ProgrammableStageDescriptor {
+        fragment: Some(wgpu::FragmentState {
+            targets: color_targets,
             module: &fs_module,
             entry_point: "main",
         }),
-        rasterization_state: Some(wgpu::RasterizationStateDescriptor {
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
             front_face: wgpu::FrontFace::Ccw,
             cull_mode: wgpu::CullMode::None,
-            depth_bias: 0,
-            depth_bias_slope_scale: 0.0,
-            depth_bias_clamp: 0.0,
-            clamp_depth: false,
-        }),
-        primitive_topology: wgpu::PrimitiveTopology::TriangleList,
-        color_states: &[wgpu::ColorStateDescriptor {
-            format: sc_desc.format,
-            color_blend: wgpu::BlendDescriptor::REPLACE,
-            alpha_blend: wgpu::BlendDescriptor::REPLACE,
-            write_mask: wgpu::ColorWrite::ALL,
-        }],
-        depth_stencil_state: Some(wgpu::DepthStencilStateDescriptor {
-            format: texture::Texture::DEPTH_FORMAT,
+            polygon_mode: wgpu::PolygonMode::Fill,
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
             depth_write_enabled: true,
             depth_compare: wgpu::CompareFunction::Less,
-            stencil: wgpu::StencilStateDescriptor::default(),
+            stencil: wgpu::StencilState {
+                front: wgpu::StencilFaceState {
+                    compare: wgpu::CompareFunction::Never,
+                    fail_op: wgpu::StencilOperation::Keep,
+                    depth_fail_op: wgpu::StencilOperation::Keep,
+                    pass_op: wgpu::StencilOperation::Keep,
+                },
+                back: wgpu::StencilFaceState {
+                    compare: wgpu::CompareFunction::Never,
+                    fail_op: wgpu::StencilOperation::Keep,
+                    depth_fail_op: wgpu::StencilOperation::Keep,
+                    pass_op: wgpu::StencilOperation::Keep,
+                },
+                read_mask: !0,
+                write_mask: !0,
+            },
+            bias: wgpu::DepthBiasState::default(),
+            clamp_depth: false,
         }),
-        vertex_state: wgpu::VertexStateDescriptor {
-            index_format: wgpu::IndexFormat::Uint32,
-            vertex_buffers: &[Vertex::desc()],
+        multisample: wgpu::MultisampleState {
+            count: 1,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
         },
-        sample_count: 1,
-        sample_mask: !0,
-        alpha_to_coverage_enabled: false,
     })
 }

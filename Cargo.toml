@@ -1,7 +1,6 @@
 [package]
 name = "particles"
 version = "0.1.0"
-authors = ["Jasper Reef <jasper.reef@gmx.de>"]
 edition = "2018"
 
 [dependencies]
@@ -18,7 +17,7 @@ rand = "0.8.4"
 rayon = "1.5.1"
 
 [dependencies.wgpu]
-version = "0.6"
+version = "0.7"
 
 [build-dependencies]
 anyhow = "1.0"
