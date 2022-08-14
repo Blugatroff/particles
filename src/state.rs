@@ -4,6 +4,8 @@ const DRAG: f32 = 0.01;
 const BOOMPOWER: f32 = 1.0;
 const MAXFRAMETIME: f32 = 1.0 / 60.0;
 
+//use std::num::NonZeroU64;
+
 use std::num::NonZeroU64;
 
 use super::*;
@@ -871,22 +873,7 @@ fn create_render_pipeline(
             format: wgpu::TextureFormat::Depth32Float,
             depth_write_enabled: true,
             depth_compare: wgpu::CompareFunction::Less,
-            stencil: wgpu::StencilState {
-                front: wgpu::StencilFaceState {
-                    compare: wgpu::CompareFunction::Never,
-                    fail_op: wgpu::StencilOperation::Keep,
-                    depth_fail_op: wgpu::StencilOperation::Keep,
-                    pass_op: wgpu::StencilOperation::Keep,
-                },
-                back: wgpu::StencilFaceState {
-                    compare: wgpu::CompareFunction::Never,
-                    fail_op: wgpu::StencilOperation::Keep,
-                    depth_fail_op: wgpu::StencilOperation::Keep,
-                    pass_op: wgpu::StencilOperation::Keep,
-                },
-                read_mask: !0,
-                write_mask: !0,
-            },
+            stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
         multisample: wgpu::MultisampleState {

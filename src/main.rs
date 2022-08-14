@@ -16,7 +16,6 @@ use state::*;
 use std::env;
 mod model;
 fn main() -> Result<()> {
-    #[deny(unsafe_code)]
     env_logger::init();
     let args: Vec<String> = env::args().collect();
 
