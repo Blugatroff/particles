@@ -437,10 +437,7 @@ impl State {
             buffer_size: instance_data_size as u64,
         };
 
-        let vs_module =
-            device.create_shader_module(&wgpu::include_spirv!("shaders/particle_shader.vert.spv"));
-        let fs_module =
-            device.create_shader_module(&wgpu::include_spirv!("shaders/particle_shader.frag.spv"));
+        let shader_module = device.create_shader_module(&wgpu::include_wgsl!("shaders/particle_shader.wgsl"));
 
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -463,11 +460,13 @@ impl State {
         let render_pipeline = create_render_pipeline(
             &device,
             render_pipeline_layout,
-            vs_module,
-            fs_module,
+            &shader_module,
+            &shader_module,
             vertex_buffer_layouts,
             color_targets,
             Some("Particle Pipeline"),
+            "vs_main",
+            "fs_main",
         );
 
         let mass = model::Model::load(
@@ -540,10 +539,7 @@ impl State {
             ],
             push_constant_ranges: &[],
         });
-        let vs_module =
-            device.create_shader_module(&wgpu::include_spirv!("shaders/mass_shader.vert.spv"));
-        let fs_module =
-            device.create_shader_module(&wgpu::include_spirv!("shaders/mass_shader.frag.spv"));
+        let mass_shader = device.create_shader_module(&wgpu::include_wgsl!("shaders/mass_shader.wgsl"));
         let vertex_buffer_layouts = &[Vertex::desc()];
         let color_targets = &[wgpu::ColorTargetState {
             format: wgpu::TextureFormat::Bgra8UnormSrgb,
@@ -553,11 +549,13 @@ impl State {
         let mass_pipeline = create_render_pipeline(
             &device,
             mass_pipe_layout,
-            vs_module,
-            fs_module,
+            &mass_shader,
+            &mass_shader,
             vertex_buffer_layouts,
             color_targets,
             Some("MASS PIPELINE"),
+            "vs_main",
+            "fs_main"
         );
         Ok(Self {
             print: false,
@@ -850,24 +848,26 @@ impl State {
 fn create_render_pipeline(
     device: &wgpu::Device,
     layout: wgpu::PipelineLayout,
-    vs_module: wgpu::ShaderModule,
-    fs_module: wgpu::ShaderModule,
+    vs_module: &wgpu::ShaderModule,
+    fs_module: &wgpu::ShaderModule,
     vertex_buffer_layouts: &[wgpu::VertexBufferLayout],
     color_targets: &[wgpu::ColorTargetState],
     label: Option<&'static str>,
+    vs_main: &'static str,
+    fs_main: &'static str,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label,
         layout: Some(&layout),
         vertex: wgpu::VertexState {
-            module: &vs_module,
-            entry_point: "main",
+            module: vs_module,
+            entry_point: vs_main,
             buffers: vertex_buffer_layouts,
         },
         fragment: Some(wgpu::FragmentState {
             targets: color_targets,
-            module: &fs_module,
-            entry_point: "main",
+            module: fs_module,
+            entry_point: fs_main,
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
