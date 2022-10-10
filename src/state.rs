@@ -4,8 +4,6 @@ const DRAG: f32 = 0.01;
 const BOOMPOWER: f32 = 1.0;
 const MAXFRAMETIME: f32 = 1.0 / 60.0;
 
-//use std::num::NonZeroU64;
-
 use std::num::NonZeroU64;
 
 use super::*;
@@ -221,6 +219,7 @@ impl State {
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
             })
             .await
             .unwrap();
@@ -238,13 +237,15 @@ impl State {
             .unwrap();
 
         let window_size = window.inner_size();
-
+        let supported_formats = surface.get_supported_formats(&adapter);
+        let supported_alpha_modes = surface.get_supported_alpha_modes(&adapter);
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            format: supported_formats[0],
             width: window_size.width,
             height: window_size.height,
             present_mode: wgpu::PresentMode::Immediate,
+            alpha_mode: supported_alpha_modes[0],
         };
         surface.configure(&device, &surface_config);
 
@@ -305,7 +306,7 @@ impl State {
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Texture {
                             multisampled: false,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
                             view_dimension: wgpu::TextureViewDimension::D2,
                         },
                         count: None,
@@ -313,10 +314,7 @@ impl State {
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
                         visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler {
-                            comparison: false,
-                            filtering: true,
-                        },
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
                 ],
@@ -437,7 +435,8 @@ impl State {
             buffer_size: instance_data_size as u64,
         };
 
-        let shader_module = device.create_shader_module(&wgpu::include_wgsl!("shaders/particle_shader.wgsl"));
+        let shader_module =
+            device.create_shader_module(wgpu::include_wgsl!("shaders/particle_shader.wgsl"));
 
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -452,11 +451,11 @@ impl State {
             });
 
         let vertex_buffer_layouts = &[Vertex::desc()];
-        let color_targets = &[wgpu::ColorTargetState {
+        let color_targets = &[Some(wgpu::ColorTargetState {
             format: wgpu::TextureFormat::Bgra8UnormSrgb,
             blend: None,
             write_mask: wgpu::ColorWrites::ALL,
-        }];
+        })];
         let render_pipeline = create_render_pipeline(
             &device,
             render_pipeline_layout,
@@ -465,8 +464,6 @@ impl State {
             vertex_buffer_layouts,
             color_targets,
             Some("Particle Pipeline"),
-            "vs_main",
-            "fs_main",
         );
 
         let mass = model::Model::load(
@@ -539,13 +536,14 @@ impl State {
             ],
             push_constant_ranges: &[],
         });
-        let mass_shader = device.create_shader_module(&wgpu::include_wgsl!("shaders/mass_shader.wgsl"));
+        let mass_shader =
+            device.create_shader_module(wgpu::include_wgsl!("shaders/mass_shader.wgsl"));
         let vertex_buffer_layouts = &[Vertex::desc()];
-        let color_targets = &[wgpu::ColorTargetState {
+        let color_targets = &[Some(wgpu::ColorTargetState {
             format: wgpu::TextureFormat::Bgra8UnormSrgb,
             blend: None,
             write_mask: wgpu::ColorWrites::ALL,
-        }];
+        })];
         let mass_pipeline = create_render_pipeline(
             &device,
             mass_pipe_layout,
@@ -554,8 +552,6 @@ impl State {
             vertex_buffer_layouts,
             color_targets,
             Some("MASS PIPELINE"),
-            "vs_main",
-            "fs_main"
         );
         Ok(Self {
             print: false,
@@ -591,7 +587,6 @@ impl State {
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         self.surface_config.width = new_size.width;
         self.surface_config.height = new_size.height;
-        self.surface.configure(&self.device, &self.surface_config);
         self.camera.aspect = (new_size.width as f32) / (new_size.height as f32);
         self.depth_texture = texture::Texture::create_depth_texture(
             &self.device,
@@ -599,6 +594,7 @@ impl State {
             new_size.height,
             "depth_texture",
         );
+        self.surface.configure(&self.device, &self.surface_config);
     }
     pub fn device_input(&mut self, event: &DeviceEvent) {
         if let winit::event::DeviceEvent::MouseMotion { delta } = event {
@@ -624,10 +620,10 @@ impl State {
                     (ElementState::Pressed, Some(VirtualKeyCode::C)) => {
                         self.camera.reset();
                     }
-                    (ElementState::Pressed, Some(VirtualKeyCode::Add)) => {
+                    (ElementState::Pressed, Some(VirtualKeyCode::NumpadAdd)) => {
                         self.g *= 1.05;
                     }
-                    (ElementState::Pressed, Some(VirtualKeyCode::Subtract)) => {
+                    (ElementState::Pressed, Some(VirtualKeyCode::NumpadSubtract)) => {
                         self.g *= 0.95;
                     }
                     (ElementState::Pressed, Some(VirtualKeyCode::B)) => {
@@ -766,11 +762,7 @@ impl State {
     }
 
     pub fn render(&mut self) {
-        let frame = self
-            .surface
-            .get_current_frame()
-            .expect("Timeout getting texture")
-            .output;
+        let frame = self.surface.get_current_texture().unwrap();
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -781,14 +773,14 @@ impl State {
             });
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                color_attachments: &[wgpu::RenderPassColorAttachment {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: true,
                     },
-                }],
+                })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth_texture.view,
                     depth_ops: Some(wgpu::Operations {
@@ -832,7 +824,8 @@ impl State {
                 );
             }
         }
-        self.queue.submit(std::iter::once(encoder.finish()));
+        self.queue.submit(Some(encoder.finish()));
+        frame.present();
     }
     fn reset(&mut self) {
         self.particles
@@ -851,23 +844,21 @@ fn create_render_pipeline(
     vs_module: &wgpu::ShaderModule,
     fs_module: &wgpu::ShaderModule,
     vertex_buffer_layouts: &[wgpu::VertexBufferLayout],
-    color_targets: &[wgpu::ColorTargetState],
+    color_targets: &[Option<wgpu::ColorTargetState>],
     label: Option<&'static str>,
-    vs_main: &'static str,
-    fs_main: &'static str,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label,
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: vs_module,
-            entry_point: vs_main,
+            entry_point: "vs_main",
             buffers: vertex_buffer_layouts,
         },
         fragment: Some(wgpu::FragmentState {
             targets: color_targets,
             module: fs_module,
-            entry_point: fs_main,
+            entry_point: "fs_main",
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
@@ -875,7 +866,7 @@ fn create_render_pipeline(
             front_face: wgpu::FrontFace::Ccw,
             cull_mode: None,
             polygon_mode: wgpu::PolygonMode::Fill,
-            clamp_depth: false,
+            unclipped_depth: false,
             conservative: false,
         },
         depth_stencil: Some(wgpu::DepthStencilState {
@@ -890,5 +881,6 @@ fn create_render_pipeline(
             mask: !0,
             alpha_to_coverage_enabled: false,
         },
+        multiview: None,
     })
 }

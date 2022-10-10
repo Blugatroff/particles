@@ -42,7 +42,9 @@ fn main() -> Result<()> {
     };
     // Since main can't be async, we're going to need to block
     let mut state = block_on(State::new(&window, num, g * 100000.0))?;
-    window.set_cursor_grab(true).ok();
+    window
+        .set_cursor_grab(winit::window::CursorGrabMode::Confined)
+        .ok();
     window.set_cursor_visible(false);
     window.set_title("particles");
     event_loop.run(move |event, _, control_flow| match event {
@@ -54,12 +56,16 @@ fn main() -> Result<()> {
                 match event {
                     WindowEvent::Focused(true) => {
                         window.set_cursor_visible(false);
-                        window.set_cursor_grab(true).ok();
+                        window
+                            .set_cursor_grab(winit::window::CursorGrabMode::Confined)
+                            .ok();
                         is_focused = true;
                     }
                     WindowEvent::Focused(false) => {
                         window.set_cursor_visible(true);
-                        window.set_cursor_grab(false).unwrap();
+                        window
+                            .set_cursor_grab(winit::window::CursorGrabMode::None)
+                            .unwrap();
                         is_focused = false;
                     }
                     WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,

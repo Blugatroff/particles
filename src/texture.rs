@@ -16,8 +16,8 @@ impl Texture {
         let label = path_copy.to_str();
         println!("{:?}", label);
         let img = match image::open(path) {
-            Ok(img) => img,
-            Err(_) => create_colored([255, 255, 255, 255]),
+            Result::Ok(img) => img,
+            Result::Err(_) => create_colored([255, 255, 255, 255]),
         };
 
         Ok(Self::from_image(device, queue, &img, label))
@@ -94,6 +94,7 @@ impl Texture {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Nearest,
             mipmap_filter: wgpu::FilterMode::Nearest,
+            compare: None,
             ..Default::default()
         });
 
