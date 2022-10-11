@@ -10,6 +10,7 @@ use super::*;
 use anyhow::*;
 use model::*;
 use rayon::prelude::*;
+use wgpu::util::DrawIndexedIndirect;
 use winit::window::Window;
 
 fn align_to(n: u64, alignment: u64) -> u64 {
@@ -20,7 +21,6 @@ fn align_to(n: u64, alignment: u64) -> u64 {
 #[derive(Debug, Copy, Clone)]
 pub struct Uniforms {
     view_proj: cgmath::Matrix4<f32>,
-    model_transform: cgmath::Matrix4<f32>,
 }
 
 unsafe impl bytemuck::Pod for Uniforms {}
@@ -30,7 +30,6 @@ impl Uniforms {
     pub fn new() -> Self {
         Self {
             view_proj: cgmath::Matrix4::identity(),
-            model_transform: cgmath::Matrix4::identity(),
         }
     }
 
@@ -47,32 +46,32 @@ struct InstanceRaw {
 
 unsafe impl bytemuck::Pod for InstanceRaw {}
 unsafe impl bytemuck::Zeroable for InstanceRaw {}
-#[repr(C)]
+
+#[allow(unused)]
+#[repr(packed)]
 #[derive(Copy, Clone)]
-struct DataRaw {
-    life_time: f32,
+struct ParticleRaw {
+    position: cgmath::Vector3<f32>,
+    scale: f32,
+    lifetime: f32,
+    _padding: [f32; 3],
 }
-unsafe impl bytemuck::Pod for DataRaw {}
-unsafe impl bytemuck::Zeroable for DataRaw {}
+unsafe impl bytemuck::Pod for ParticleRaw {}
+unsafe impl bytemuck::Zeroable for ParticleRaw {}
 
 struct ParticleInstance {
     position: cgmath::Vector3<f32>,
-    rotation: cgmath::Quaternion<f32>,
     life_time: f32,
     velocity: cgmath::Vector3<f32>,
     scale: f32,
 }
 impl ParticleInstance {
-    fn to_raw(&self) -> InstanceRaw {
-        InstanceRaw {
-            model: cgmath::Matrix4::from_translation(self.position)
-                * cgmath::Matrix4::from_scale(self.scale)
-                * cgmath::Matrix4::from(self.rotation),
-        }
-    }
-    fn to_data(&self) -> DataRaw {
-        DataRaw {
-            life_time: self.life_time,
+    fn to_data(&self) -> ParticleRaw {
+        ParticleRaw {
+            position: self.position,
+            scale: self.scale,
+            lifetime: self.life_time,
+            _padding: unsafe { std::mem::MaybeUninit::uninit().assume_init() },
         }
     }
 }
@@ -86,7 +85,6 @@ struct MassInstance {
 impl MassInstance {
     fn into_raw(self) -> InstanceRaw {
         InstanceRaw {
-            /* life_time: self.life_time, */
             model: cgmath::Matrix4::from_translation(self.position)
                 * cgmath::Matrix4::from_scale(self.scale)
                 * cgmath::Matrix4::from(self.rotation),
@@ -96,7 +94,6 @@ impl MassInstance {
 
 struct Binding {
     buffer: wgpu::Buffer,
-    buffer_size: u64,
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
 }
@@ -105,7 +102,6 @@ struct PipePackage {
     pipeline: wgpu::RenderPipeline,
     model: Model,
     binding: Binding,
-    data_binding: Binding,
     instances: Vec<ParticleInstance>,
 }
 
@@ -118,15 +114,14 @@ struct PipePackageMass {
 
 impl PipePackage {
     fn refresh(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        let data: Vec<InstanceRaw> = self
+        let data: Vec<ParticleRaw> = self
             .instances
             .iter()
-            .map(|instance| instance.to_raw())
+            .map(|instance| instance.to_data())
             .collect();
-        let data_size = (data.len() * std::mem::size_of::<InstanceRaw>()) as u64;
-        if data_size > self.binding.buffer_size {
+        let data_size = (data.len() * std::mem::size_of::<ParticleRaw>()) as u64;
+        if data_size > self.binding.buffer.size() {
             let buffer_size = align_to(data_size * 3 / 2, 4);
-            self.binding.buffer_size = buffer_size;
             self.binding.buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Instance Buffer"),
                 size: buffer_size,
@@ -140,7 +135,7 @@ impl PipePackage {
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: &self.binding.buffer,
                         offset: 0,
-                        size: NonZeroU64::new(self.binding.buffer_size),
+                        size: NonZeroU64::new(self.binding.buffer.size()),
                     }),
                 }],
                 label: Some("instance_bind_group"),
@@ -149,42 +144,6 @@ impl PipePackage {
         unsafe {
             queue.write_buffer(
                 &self.binding.buffer,
-                0,
-                std::slice::from_raw_parts(data.as_ptr() as *const u8, data_size as usize),
-            );
-        }
-        let data: Vec<DataRaw> = self
-            .instances
-            .iter()
-            .map(|instance| instance.to_data())
-            .collect();
-        let data_size = (data.len() * std::mem::size_of::<DataRaw>()) as u64;
-        if data_size > self.data_binding.buffer_size {
-            let buffer_size = align_to(data_size * 3 / 2, 4);
-            self.data_binding.buffer_size = buffer_size;
-
-            self.data_binding.buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Instance Buffer"),
-                size: buffer_size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.data_binding.bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                layout: &self.data_binding.bind_group_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &self.data_binding.buffer,
-                        offset: 0,
-                        size: NonZeroU64::new(self.data_binding.buffer_size),
-                    }),
-                }],
-                label: Some("instance_bind_group"),
-            });
-        }
-        unsafe {
-            queue.write_buffer(
-                &self.data_binding.buffer,
                 0,
                 std::slice::from_raw_parts(data.as_ptr() as *const u8, data_size as usize),
             );
@@ -203,6 +162,7 @@ pub struct State {
     uniform_binding: Binding,
     particles: PipePackage,
     masses: PipePackageMass,
+    indirect_buffer: wgpu::Buffer,
     camera: Camera,
     last_time: std::time::Instant,
     test_angle: f32,
@@ -210,6 +170,7 @@ pub struct State {
     g: f32,
     particle_adding_value: i32,
     print: bool,
+    particle_buffer: wgpu::Buffer,
 }
 impl State {
     pub async fn new(window: &Window, particle_number: i32, g: f32) -> Result<Self> {
@@ -290,7 +251,6 @@ impl State {
             buffer: uniform_buffer,
             bind_group_layout: uniform_bind_group_layout,
             bind_group: uniform_bind_group,
-            buffer_size: std::mem::size_of::<Uniforms>() as u64,
         };
         let depth_texture = texture::Texture::create_depth_texture(
             &device,
@@ -336,23 +296,16 @@ impl State {
             let life_time = rng.gen::<f32>() % 1.0;
             instances.push(ParticleInstance {
                 position: cgmath::Vector3::new(x, y, z),
-                rotation: cgmath::Quaternion::from_axis_angle(
-                    cgmath::Vector3::new(0.0, 1.0, 0.0),
-                    cgmath::Deg(0.1),
-                ),
                 scale: SCALE,
                 life_time,
                 velocity: cgmath::Vector3::new(0.0, 0.0, 0.0),
             });
         }
-        let instance_data: Vec<InstanceRaw> = instances
-            .iter()
-            .map(ParticleInstance::to_raw)
-            .collect::<Vec<_>>();
-        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Instance Buffer"),
-            contents: bytemuck::cast_slice(&instance_data),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            size: (instances.len() * std::mem::size_of::<ParticleInstance>()) as u64,
+            mapped_at_creation: false,
         });
 
         let instance_bind_group_layout =
@@ -377,62 +330,15 @@ impl State {
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &instance_buffer,
                     offset: 0,
-                    size: NonZeroU64::new(
-                        (instance_data.len() * std::mem::size_of::<InstanceRaw>()) as u64,
-                    ),
+                    size: None,
                 }),
             }],
             label: Some("instance_bind_group"),
-        });
-        let instance_data_data = instances
-            .iter()
-            .map(ParticleInstance::to_data)
-            .collect::<Vec<_>>();
-        let instance_data_size = instance_data_data.len() * std::mem::size_of::<DataRaw>();
-        let instance_data_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Instance Buffer"),
-            contents: bytemuck::cast_slice(&instance_data_data),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
         let instances_binding = Binding {
             buffer: instance_buffer,
             bind_group_layout: instance_bind_group_layout,
             bind_group: instance_bind_group,
-            buffer_size: (instance_data.len() * std::mem::size_of::<InstanceRaw>()) as u64,
-        };
-
-        let instance_data_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        min_binding_size: None,
-                        has_dynamic_offset: false,
-                    },
-                    count: None,
-                }],
-                label: Some("instance_data_bind_group_layout"),
-            });
-
-        let instance_data_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &instance_data_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &instance_data_buffer,
-                    offset: 0,
-                    size: NonZeroU64::new(instance_data_size as u64),
-                }),
-            }],
-            label: Some("instance_data_bind_group"),
-        });
-        let instance_data_binding = Binding {
-            buffer: instance_data_buffer,
-            bind_group_layout: instance_data_bind_group_layout,
-            bind_group: instance_data_bind_group,
-            buffer_size: instance_data_size as u64,
         };
 
         let shader_module =
@@ -445,7 +351,6 @@ impl State {
                     &texture_bind_group_layout,
                     &uniform_binding.bind_group_layout,
                     &instances_binding.bind_group_layout,
-                    &instance_data_binding.bind_group_layout,
                 ],
                 push_constant_ranges: &[],
             });
@@ -525,7 +430,6 @@ impl State {
             buffer: mass_instances_buffer,
             bind_group_layout: mass_instances_bind_group_layout,
             bind_group: mass_instances_bind_group,
-            buffer_size: mass_instance_size as u64,
         };
         let mass_pipe_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Light Pipeline"),
@@ -553,6 +457,18 @@ impl State {
             color_targets,
             Some("MASS PIPELINE"),
         );
+        let indirect_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("indirect_buffer"),
+            size: std::mem::size_of::<DrawIndexedIndirect>() as u64,
+            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+        let particle_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("particle buffer"),
+            size: 1024,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         Ok(Self {
             print: false,
             surface,
@@ -563,7 +479,6 @@ impl State {
                 pipeline: render_pipeline,
                 model,
                 binding: instances_binding,
-                data_binding: instance_data_binding,
                 instances,
             },
             camera,
@@ -581,6 +496,8 @@ impl State {
             avg_speed_last_frame: 0.0,
             g,
             particle_adding_value: 0,
+            indirect_buffer,
+            particle_buffer,
         })
     }
 
@@ -657,9 +574,8 @@ impl State {
         true
     }
     pub fn update(&mut self) {
-        let delta_time = std::time::Instant::now()
-            .duration_since(self.last_time)
-            .as_secs_f32();
+        let delta_time = std::time::Instant::now().duration_since(self.last_time);
+        let delta_time = delta_time.as_secs_f32();
         self.last_time = std::time::Instant::now();
         self.camera.update(delta_time);
         self.uniforms.update_view_proj(&self.camera);
@@ -684,10 +600,6 @@ impl State {
             for _ in 0..self.particle_adding_value {
                 self.particles.instances.push(ParticleInstance {
                     position: cgmath::Vector3::new(0.0, 0.3, 0.0),
-                    rotation: cgmath::Quaternion::from_axis_angle(
-                        cgmath::Vector3::new(0.0, 1.0, 0.0),
-                        cgmath::Deg(rng.gen::<f32>() % 360.0),
-                    ),
                     scale: SCALE,
                     life_time: 1.0,
                     velocity: cgmath::Vector3::new(
@@ -772,6 +684,14 @@ impl State {
                 label: Some("Render Encoder"),
             });
         {
+            //let compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            //    label: Some("compute pass"),
+            //});
+            //compute_pass.set_pipeline(self.indirect_pipeline);
+            //compute_pass.set_bind_group(0, bind_group, offsets)
+            //compute_pass.dispatch_workgroups(x, y, z);
+        }
+        {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
@@ -791,7 +711,6 @@ impl State {
                 }),
                 label: None,
             });
-
             render_pass.set_pipeline(&self.particles.pipeline);
             for mesh in &self.particles.model.meshes {
                 let material = &self.particles.model.materials[mesh.material];
@@ -801,7 +720,7 @@ impl State {
                 render_pass.set_bind_group(0, &material.bind_group, &[]);
                 render_pass.set_bind_group(1, &self.uniform_binding.bind_group, &[]);
                 render_pass.set_bind_group(2, &self.particles.binding.bind_group, &[]);
-                render_pass.set_bind_group(3, &self.particles.data_binding.bind_group, &[]);
+                render_pass.draw_indexed_indirect(&self.indirect_buffer, 0);
                 render_pass.draw_indexed(
                     0..mesh.num_elements,
                     0,

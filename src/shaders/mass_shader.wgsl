@@ -5,7 +5,6 @@ struct VertexOutput {
 
 struct Uniforms {
     view_proj: mat4x4<f32>,
-    model_transform: mat4x4<f32>,
 };
 
 @group(1)
@@ -30,7 +29,6 @@ fn vs_main(
     result.tex_coords = tex_coords;
     result.position = uniforms.view_proj
         * instances.instances[instance_index]
-        * uniforms.model_transform
         * vec4<f32>(position, 1.0);
     return result;
 }

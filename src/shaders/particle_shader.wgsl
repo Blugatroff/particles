@@ -6,28 +6,25 @@ struct VertexOutput {
 
 struct Uniforms {
     view_proj: mat4x4<f32>,
-    model_transform: mat4x4<f32>,
 };
 
 @group(1)
 @binding(0)
 var<uniform> uniforms: Uniforms;
 
+struct Instance {
+    position: vec3<f32>,
+    scale: f32,
+    life_time: f32,
+};
+
 struct Instances {
-    instances: array<mat4x4<f32>>,
+    instances: array<Instance>,
 };
 
 @group(2)
 @binding(0)
 var<storage, read> instances: Instances;
-
-struct InstancesData {
-    life_times: array<f32>,
-};
-
-@group(3)
-@binding(0)
-var<storage, read> instances_data: InstancesData;
 
 @vertex
 fn vs_main(
@@ -37,11 +34,9 @@ fn vs_main(
 ) -> VertexOutput {
     var result: VertexOutput;
     result.tex_coords = tex_coords;
-    result.life_time = instances_data.life_times[instance_index];
-    result.position = uniforms.view_proj 
-        * instances.instances[instance_index] 
-        * uniforms.model_transform 
-        * vec4<f32>(position, 1.0);
+    var instance = instances.instances[instance_index];
+    result.life_time = instance.life_time;
+    result.position = uniforms.view_proj * vec4<f32>(instance.position + instance.scale * position, 1.0);
     return result;
 }
 
