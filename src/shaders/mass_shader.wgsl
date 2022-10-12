@@ -11,13 +11,14 @@ struct Uniforms {
 @binding(0)
 var<uniform> uniforms: Uniforms;
 
-struct Instances {
-    instances: array<mat4x4<f32>>,
+struct Mass {
+    position: vec3<f32>,
+    scale: f32,
 };
 
 @group(2)
 @binding(0)
-var<storage, read> instances: Instances;
+var<storage, read> instances: array<Mass>;
 
 @vertex
 fn vs_main(
@@ -28,8 +29,7 @@ fn vs_main(
     var result: VertexOutput;
     result.tex_coords = tex_coords;
     result.position = uniforms.view_proj
-        * instances.instances[instance_index]
-        * vec4<f32>(position, 1.0);
+        * vec4<f32>(instances[instance_index].position + instances[instance_index].scale * position, 1.0);
     return result;
 }
 

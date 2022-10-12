@@ -1,26 +1,33 @@
 const SCALE: f32 = 0.001;
 const RANGE: i32 = 10;
-const DRAG: f32 = 0.01;
 const BOOMPOWER: f32 = 1.0;
 const MAXFRAMETIME: f32 = 1.0 / 60.0;
 
-use std::num::NonZeroU64;
+use std::{num::NonZeroU64, sync::Arc};
 
 use super::*;
 use anyhow::*;
 use model::*;
-use rayon::prelude::*;
-use wgpu::util::DrawIndexedIndirect;
+use rand::Rng;
+use wgpu::{util::DrawIndexedIndirect, CommandEncoder};
 use winit::window::Window;
-
-fn align_to(n: u64, alignment: u64) -> u64 {
-    n + (n % alignment)
-}
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct Uniforms {
     view_proj: cgmath::Matrix4<f32>,
+    n_masses: u32,
+    n_particles_requested: u32,
+    n_particles: u32,
+    g: f32,
+    delta_time: f32,
+    push: f32,
+    reset: u32,
+    frame: u32,
+    cam_pos: cgmath::Vector3<f32>,
+    padding: u32,
+    random: cgmath::Vector3<f32>,
+    padding2: u32,
 }
 
 unsafe impl bytemuck::Pod for Uniforms {}
@@ -30,6 +37,18 @@ impl Uniforms {
     pub fn new() -> Self {
         Self {
             view_proj: cgmath::Matrix4::identity(),
+            n_masses: 0,
+            n_particles_requested: 0,
+            n_particles: 0,
+            g: 0.0,
+            delta_time: 0.0,
+            reset: 0,
+            push: 0.0,
+            cam_pos: cgmath::Vector3::zero(),
+            frame: 0,
+            padding: 0,
+            random: cgmath::Vector3::zero(),
+            padding2: 0,
         }
     }
 
@@ -39,61 +58,26 @@ impl Uniforms {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone)]
-struct InstanceRaw {
-    model: cgmath::Matrix4<f32>,
-}
-
-unsafe impl bytemuck::Pod for InstanceRaw {}
-unsafe impl bytemuck::Zeroable for InstanceRaw {}
-
 #[allow(unused)]
-#[repr(packed)]
 #[derive(Copy, Clone)]
-struct ParticleRaw {
-    position: cgmath::Vector3<f32>,
-    scale: f32,
-    lifetime: f32,
-    _padding: [f32; 3],
-}
-unsafe impl bytemuck::Pod for ParticleRaw {}
-unsafe impl bytemuck::Zeroable for ParticleRaw {}
-
-struct ParticleInstance {
-    position: cgmath::Vector3<f32>,
-    life_time: f32,
-    velocity: cgmath::Vector3<f32>,
-    scale: f32,
-}
-impl ParticleInstance {
-    fn to_data(&self) -> ParticleRaw {
-        ParticleRaw {
-            position: self.position,
-            scale: self.scale,
-            lifetime: self.life_time,
-            _padding: unsafe { std::mem::MaybeUninit::uninit().assume_init() },
-        }
-    }
+struct Particle {
+    position_and_scale: cgmath::Vector4<f32>,
+    velocity_and_lifetime: cgmath::Vector4<f32>,
 }
 
+unsafe impl bytemuck::Pod for Particle {}
+unsafe impl bytemuck::Zeroable for Particle {}
+
+#[repr(C)]
 #[derive(Copy, Clone)]
-struct MassInstance {
-    position: cgmath::Vector3<f32>,
-    rotation: cgmath::Quaternion<f32>,
-    scale: f32,
+struct Mass {
+    position_and_scale: cgmath::Vector4<f32>,
 }
-impl MassInstance {
-    fn into_raw(self) -> InstanceRaw {
-        InstanceRaw {
-            model: cgmath::Matrix4::from_translation(self.position)
-                * cgmath::Matrix4::from_scale(self.scale)
-                * cgmath::Matrix4::from(self.rotation),
-        }
-    }
-}
+unsafe impl bytemuck::Pod for Mass {}
+unsafe impl bytemuck::Zeroable for Mass {}
 
 struct Binding {
-    buffer: wgpu::Buffer,
+    buffer: Arc<wgpu::Buffer>,
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
 }
@@ -102,53 +86,13 @@ struct PipePackage {
     pipeline: wgpu::RenderPipeline,
     model: Model,
     binding: Binding,
-    instances: Vec<ParticleInstance>,
 }
 
 struct PipePackageMass {
     pipeline: wgpu::RenderPipeline,
     model: Model,
     binding: Binding,
-    instances: Vec<MassInstance>,
-}
-
-impl PipePackage {
-    fn refresh(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        let data: Vec<ParticleRaw> = self
-            .instances
-            .iter()
-            .map(|instance| instance.to_data())
-            .collect();
-        let data_size = (data.len() * std::mem::size_of::<ParticleRaw>()) as u64;
-        if data_size > self.binding.buffer.size() {
-            let buffer_size = align_to(data_size * 3 / 2, 4);
-            self.binding.buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Instance Buffer"),
-                size: buffer_size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            self.binding.bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                layout: &self.binding.bind_group_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &self.binding.buffer,
-                        offset: 0,
-                        size: NonZeroU64::new(self.binding.buffer.size()),
-                    }),
-                }],
-                label: Some("instance_bind_group"),
-            });
-        }
-        unsafe {
-            queue.write_buffer(
-                &self.binding.buffer,
-                0,
-                std::slice::from_raw_parts(data.as_ptr() as *const u8, data_size as usize),
-            );
-        }
-    }
+    instances: Vec<Mass>,
 }
 
 #[allow(dead_code)]
@@ -170,7 +114,12 @@ pub struct State {
     g: f32,
     particle_adding_value: i32,
     print: bool,
-    particle_buffer: wgpu::Buffer,
+    growing: bool,
+    compute_pipeline: wgpu::ComputePipeline,
+    suspend_updates: bool,
+    jobs: Vec<Box<dyn FnOnce(&mut CommandEncoder)>>,
+    frame: u32,
+    rng: rand::rngs::ThreadRng,
 }
 impl State {
     pub async fn new(window: &Window, particle_number: i32, g: f32) -> Result<Self> {
@@ -185,18 +134,23 @@ impl State {
             .await
             .unwrap();
 
+        let limits = adapter.limits();
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
-                    features: wgpu::Features::empty(),
-                    limits: wgpu::Limits::default(),
+                    features: wgpu::Features::VERTEX_WRITABLE_STORAGE,
+                    limits: wgpu::Limits {
+                        max_storage_buffer_binding_size: dbg!(
+                            limits.max_storage_buffer_binding_size
+                        ),
+                        ..Default::default()
+                    },
                     label: None,
                 },
                 None,
             )
             .await
             .unwrap();
-
         let window_size = window.inner_size();
         let supported_formats = surface.get_supported_formats(&adapter);
         let supported_alpha_modes = surface.get_supported_alpha_modes(&adapter);
@@ -213,6 +167,7 @@ impl State {
         let camera = Camera::new(surface_config.width as f32 / surface_config.height as f32);
 
         let mut uniforms = Uniforms::new();
+        uniforms.n_particles_requested = particle_number as u32;
         uniforms.update_view_proj(&camera);
 
         let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -224,7 +179,7 @@ impl State {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         min_binding_size: None,
@@ -248,7 +203,7 @@ impl State {
             label: Some("uniform_bind_group"),
         });
         let uniform_binding = Binding {
-            buffer: uniform_buffer,
+            buffer: Arc::new(uniform_buffer),
             bind_group_layout: uniform_bind_group_layout,
             bind_group: uniform_bind_group,
         };
@@ -286,25 +241,11 @@ impl State {
             &texture_bind_group_layout,
             "assets/simpleParticle.obj",
         )?;
-        let mut instances: Vec<ParticleInstance> = Vec::new();
-        for _ in 0..particle_number {
-            use rand::Rng;
-            let mut rng = rand::thread_rng();
-            let x: f32 = rng.gen::<f32>() % RANGE as f32 - 0.5;
-            let y: f32 = rng.gen::<f32>() % RANGE as f32 - 0.5;
-            let z: f32 = rng.gen::<f32>() % RANGE as f32 - 0.5;
-            let life_time = rng.gen::<f32>() % 1.0;
-            instances.push(ParticleInstance {
-                position: cgmath::Vector3::new(x, y, z),
-                scale: SCALE,
-                life_time,
-                velocity: cgmath::Vector3::new(0.0, 0.0, 0.0),
-            });
-        }
+
         let instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Instance Buffer"),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            size: (instances.len() * std::mem::size_of::<ParticleInstance>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            size: 8 + (1024 * std::mem::size_of::<Particle>()) as u64,
             mapped_at_creation: false,
         });
 
@@ -312,10 +253,10 @@ impl State {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         min_binding_size: None,
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
                     },
                     count: None,
@@ -336,7 +277,7 @@ impl State {
             label: Some("instance_bind_group"),
         });
         let instances_binding = Binding {
-            buffer: instance_buffer,
+            buffer: Arc::new(instance_buffer),
             bind_group_layout: instance_bind_group_layout,
             bind_group: instance_bind_group,
         };
@@ -377,34 +318,26 @@ impl State {
             &texture_bind_group_layout,
             "assets/sphere.obj",
         )?;
-        let mass_num = 5;
-        let mut mass_instances: Vec<MassInstance> = Vec::new();
-        for i in 0..mass_num {
-            mass_instances.push(MassInstance {
-                position: cgmath::Vector3::new(i as f32, 0.0, 0.0),
-                rotation: cgmath::Quaternion::from_axis_angle(
-                    cgmath::Vector3::new(0.0, 1.0, 0.0),
-                    cgmath::Deg(0.0),
-                ),
-                scale: 5.0 / 100.0,
-            });
-        }
-        let mass_instances_data = mass_instances
-            .iter()
-            .copied()
-            .map(MassInstance::into_raw)
-            .collect::<Vec<_>>();
-        let mass_instance_size = mass_instances_data.len() * std::mem::size_of::<InstanceRaw>();
-        let mass_instances_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let masses: Vec<Mass> = vec![
+            cgmath::Vector4::new(0.0, 0.0, 0.0, -1.0 / 100.0),
+            cgmath::Vector4::new(0.0, 0.0, 0.0, 8.0 / 100.0),
+            cgmath::Vector4::new(0.0, 0.0, 0.0, -3.0 / 100.0),
+            cgmath::Vector4::new(0.0, 0.0, 0.0, 7.0 / 100.0),
+        ]
+        .into_iter()
+        .map(|position_and_scale| Mass { position_and_scale })
+        .collect();
+        let mass_instance_size = masses.len() * std::mem::size_of::<Mass>();
+        let masses_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Instance Buffer"),
-            contents: bytemuck::cast_slice(&mass_instances_data),
+            contents: bytemuck::cast_slice(&masses),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
-        let mass_instances_bind_group_layout =
+        let masses_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         min_binding_size: None,
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -414,29 +347,29 @@ impl State {
                 }],
                 label: Some("instance_bind_group_layout"),
             });
-        let mass_instances_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &mass_instances_bind_group_layout,
+        let masses_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &masses_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &mass_instances_buffer,
+                    buffer: &masses_buffer,
                     size: NonZeroU64::new(mass_instance_size as u64),
                     offset: 0,
                 }),
             }],
             label: Some("instance_bind_group"),
         });
-        let mass_instances_binding = Binding {
-            buffer: mass_instances_buffer,
-            bind_group_layout: mass_instances_bind_group_layout,
-            bind_group: mass_instances_bind_group,
+        let masses_binding = Binding {
+            buffer: Arc::new(masses_buffer),
+            bind_group_layout: masses_bind_group_layout,
+            bind_group: masses_bind_group,
         };
         let mass_pipe_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Light Pipeline"),
             bind_group_layouts: &[
                 &texture_bind_group_layout,
                 &uniform_binding.bind_group_layout,
-                &instances_binding.bind_group_layout,
+                &masses_binding.bind_group_layout,
             ],
             push_constant_ranges: &[],
         });
@@ -463,15 +396,30 @@ impl State {
             usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
-        let particle_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("particle buffer"),
-            size: 1024,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+        let compute_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("compute pipeline layout"),
+                bind_group_layouts: &[
+                    &uniform_binding.bind_group_layout,
+                    &instances_binding.bind_group_layout,
+                    &masses_binding.bind_group_layout,
+                ],
+                push_constant_ranges: &[],
+            });
+        let compute_shader =
+            device.create_shader_module(wgpu::include_wgsl!("shaders/compute.wgsl"));
+        let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("compute pipeline"),
+            layout: Some(&compute_pipeline_layout),
+            module: &compute_shader,
+            entry_point: "main",
         });
         Ok(Self {
+            rng: rand::thread_rng(),
+            frame: 0,
             print: false,
             surface,
+            growing: false,
             device,
             queue,
             surface_config,
@@ -479,7 +427,6 @@ impl State {
                 pipeline: render_pipeline,
                 model,
                 binding: instances_binding,
-                instances,
             },
             camera,
             uniforms,
@@ -487,8 +434,8 @@ impl State {
             masses: PipePackageMass {
                 pipeline: mass_pipeline,
                 model: mass,
-                binding: mass_instances_binding,
-                instances: mass_instances,
+                binding: masses_binding,
+                instances: masses,
             },
             depth_texture,
             last_time: std::time::Instant::now(),
@@ -497,7 +444,9 @@ impl State {
             g,
             particle_adding_value: 0,
             indirect_buffer,
-            particle_buffer,
+            compute_pipeline,
+            suspend_updates: false,
+            jobs: Vec::new(),
         })
     }
 
@@ -531,11 +480,11 @@ impl State {
                     ..
                 } = input;
                 match (state, virtual_keycode) {
-                    (ElementState::Pressed, Some(VirtualKeyCode::R)) => {
-                        self.reset();
-                    }
                     (ElementState::Pressed, Some(VirtualKeyCode::C)) => {
                         self.camera.reset();
+                    }
+                    (ElementState::Pressed, Some(VirtualKeyCode::U)) => {
+                        self.suspend_updates = !self.suspend_updates;
                     }
                     (ElementState::Pressed, Some(VirtualKeyCode::NumpadAdd)) => {
                         self.g *= 1.05;
@@ -543,25 +492,14 @@ impl State {
                     (ElementState::Pressed, Some(VirtualKeyCode::NumpadSubtract)) => {
                         self.g *= 0.95;
                     }
+                    (ElementState::Pressed, Some(VirtualKeyCode::G)) => {
+                        self.growing = !self.growing;
+                    }
+                    (ElementState::Pressed, Some(VirtualKeyCode::R)) => {
+                        self.uniforms.reset = 1;
+                    }
                     (ElementState::Pressed, Some(VirtualKeyCode::B)) => {
-                        let eye = self.camera.eye;
-                        self.particles
-                            .instances
-                            .par_iter_mut()
-                            .for_each(|instance| {
-                                let x = eye.x;
-                                let y = eye.y;
-                                let z = eye.z;
-                                let delta: cgmath::Vector3<f32> =
-                                    cgmath::Vector3::new(x, y, z) - instance.position;
-                                let scalar = (1.0 / delta.magnitude()) * -BOOMPOWER;
-                                let acceleration = cgmath::Vector3 {
-                                    x: delta.x * scalar,
-                                    y: delta.y * scalar,
-                                    z: delta.z * scalar,
-                                };
-                                instance.velocity += acceleration;
-                            });
+                        self.uniforms.push = 0.1;
                     }
                     (state, Some(VirtualKeyCode::P)) => {
                         self.print = *state == ElementState::Pressed;
@@ -579,100 +517,88 @@ impl State {
         self.last_time = std::time::Instant::now();
         self.camera.update(delta_time);
         self.uniforms.update_view_proj(&self.camera);
-        let data = &[self.uniforms];
-        let data = bytemuck::cast_slice(data);
-        self.queue
-            .write_buffer(&self.uniform_binding.buffer, 0, data);
+        self.uniforms.cam_pos = self.camera.eye.to_vec();
         if self.print {
             println!(
-                "{}, particle_num: {}, frametime: {}, pos: {:?}",
-                if delta_time < MAXFRAMETIME { "+" } else { "-" },
-                self.particles.instances.len(),
+                "{}, n_particles: {}, frametime: {}, pos: {:?}",
+                if self.growing { '+' } else { '-' },
+                self.uniforms.n_particles,
                 delta_time,
                 self.camera.eye
             );
         }
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        let init_vel = 0.5;
-        if delta_time < MAXFRAMETIME {
-            self.particle_adding_value += 1;
-            for _ in 0..self.particle_adding_value {
-                self.particles.instances.push(ParticleInstance {
-                    position: cgmath::Vector3::new(0.0, 0.3, 0.0),
-                    scale: SCALE,
-                    life_time: 1.0,
-                    velocity: cgmath::Vector3::new(
-                        (rng.gen::<f32>() % init_vel) - (init_vel / 2.0),
-                        (rng.gen::<f32>() % init_vel) - (init_vel / 2.0),
-                        (rng.gen::<f32>() % init_vel) - (init_vel / 2.0),
-                    ),
-                })
-            }
-        } else {
-            self.particle_adding_value = if self.particle_adding_value > 0 {
-                0
-            } else {
-                self.particle_adding_value
-            };
-            self.particle_adding_value -= 1;
-            for _ in 0..self.particle_adding_value {
-                self.particles.instances.pop();
-            }
+        if self.growing {
+            self.uniforms.n_particles_requested = self.uniforms.n_particles + 1;
         }
-
-        let l: f32 = 1.0;
+        self.grow_particles_buffer();
+        let l: f32 = 0.3;
         for i in 0..self.masses.instances.len() {
-            self.masses.instances[i].position.x =
+            self.masses.instances[i].position_and_scale.x =
                 (self.test_angle / (i + 1) as f32).cos() * l * i as f32;
-            self.masses.instances[i].position.z =
+            self.masses.instances[i].position_and_scale.z =
                 (self.test_angle / (i + 1) as f32).sin() * l * i as f32;
         }
         self.test_angle += 1.0 / std::f32::consts::PI * delta_time;
 
-        let mut sum = 0.0;
-        let mass_instances = &self.masses.instances;
-        let g = self.g;
-        self.particles
-            .instances
-            .par_iter_mut()
-            .for_each(|instance| {
-                for mass in mass_instances {
-                    let delta: cgmath::Vector3<f32> = mass.position - instance.position;
-                    let scalar = (1.0 / delta.magnitude())
-                        * (std::f32::consts::FRAC_PI_6 * mass.scale.powf(3.0))
-                        * g
-                        * delta_time;
-                    let acceleration = cgmath::Vector3 {
-                        x: delta.x * scalar,
-                        y: delta.y * scalar,
-                        z: delta.z * scalar,
-                    };
-                    instance.velocity += acceleration * delta_time;
-                }
-                instance.velocity *= 1.0 - DRAG * delta_time;
-                instance.position += instance.velocity * delta_time;
-            });
-        let avg_speed_last_frame = self.avg_speed_last_frame;
-        self.particles.instances.iter_mut().for_each(|instance| {
-            let speed: f32 = instance.velocity.magnitude();
-            instance.life_time = speed / avg_speed_last_frame;
-            sum += speed;
-        });
-        self.avg_speed_last_frame = sum / self.particles.instances.len() as f32;
-
-        self.particles.refresh(&self.device, &self.queue);
-        let mass_instance_data: Vec<InstanceRaw> = self
-            .masses
-            .instances
-            .iter()
-            .map(|instance| instance.into_raw())
-            .collect();
-        let data = bytemuck::cast_slice(&mass_instance_data);
+        let data = bytemuck::cast_slice(&self.masses.instances);
         self.queue
             .write_buffer(&self.masses.binding.buffer, 0, data);
-    }
 
+        self.uniforms.g = self.g;
+        self.uniforms.random = cgmath::Vector3::new(self.rng.gen(), self.rng.gen(), self.rng.gen());
+        self.uniforms.delta_time = delta_time;
+        self.uniforms.n_masses = self.masses.instances.len() as u32;
+        let data = &[self.uniforms];
+        let data = bytemuck::cast_slice(data);
+        self.queue
+            .write_buffer(&self.uniform_binding.buffer, 0, data);
+        self.uniforms.n_particles = self.uniforms.n_particles_requested;
+        self.uniforms.reset = 0;
+        self.uniforms.push = 0.0;
+        self.uniforms.frame += 1;
+    }
+    fn grow_particles_buffer(&mut self) {
+        let min_size =
+            8 + std::mem::size_of::<Particle>() as u32 * self.uniforms.n_particles_requested;
+        if (min_size as u64) < self.particles.binding.buffer.size() {
+            return;
+        }
+        let new_size = min_size as u64 * 3 / 2;
+        let new_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("particles buffer"),
+            size: new_size,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::VERTEX
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let new_buffer = Arc::new(new_buffer);
+        let old_buffer = Arc::clone(&self.particles.binding.buffer);
+        self.particles.binding.buffer = Arc::clone(&new_buffer);
+        self.particles.binding.bind_group =
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("particles bind group"),
+                layout: &self.particles.binding.bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.particles.binding.buffer,
+                        offset: 0,
+                        size: None,
+                    }),
+                }],
+            });
+        self.jobs.push(Box::new(move |encoder| {
+            encoder.copy_buffer_to_buffer(
+                &*old_buffer,
+                0,
+                &*new_buffer,
+                0,
+                (min_size as u64).min(old_buffer.size()),
+            );
+        }));
+    }
     pub fn render(&mut self) {
         let frame = self.surface.get_current_texture().unwrap();
         let view = frame
@@ -681,15 +607,18 @@ impl State {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
+                label: Some("Command Encoder"),
             });
+        self.jobs.drain(..).for_each(|f| f(&mut encoder));
         {
-            //let compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            //    label: Some("compute pass"),
-            //});
-            //compute_pass.set_pipeline(self.indirect_pipeline);
-            //compute_pass.set_bind_group(0, bind_group, offsets)
-            //compute_pass.dispatch_workgroups(x, y, z);
+            let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("compute pass"),
+            });
+            compute_pass.set_pipeline(&self.compute_pipeline);
+            compute_pass.set_bind_group(0, &self.uniform_binding.bind_group, &[]);
+            compute_pass.set_bind_group(1, &self.particles.binding.bind_group, &[]);
+            compute_pass.set_bind_group(2, &self.masses.binding.bind_group, &[]);
+            compute_pass.dispatch_workgroups(self.uniforms.n_particles / 256 + 1, 1, 1);
         }
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -720,12 +649,8 @@ impl State {
                 render_pass.set_bind_group(0, &material.bind_group, &[]);
                 render_pass.set_bind_group(1, &self.uniform_binding.bind_group, &[]);
                 render_pass.set_bind_group(2, &self.particles.binding.bind_group, &[]);
-                render_pass.draw_indexed_indirect(&self.indirect_buffer, 0);
-                render_pass.draw_indexed(
-                    0..mesh.num_elements,
-                    0,
-                    0..self.particles.instances.len() as u32,
-                );
+                //render_pass.draw_indexed_indirect(&self.indirect_buffer, 0);
+                render_pass.draw_indexed(0..mesh.num_elements, 0, 0..self.uniforms.n_particles);
             }
             render_pass.set_pipeline(&self.masses.pipeline);
             for mesh in &self.masses.model.meshes {
@@ -745,16 +670,6 @@ impl State {
         }
         self.queue.submit(Some(encoder.finish()));
         frame.present();
-    }
-    fn reset(&mut self) {
-        self.particles
-            .instances
-            .par_iter_mut()
-            .for_each(|instance| {
-                instance.velocity.x = 0.0;
-                instance.velocity.y = 0.0;
-                instance.velocity.z = 0.0;
-            });
     }
 }
 fn create_render_pipeline(
