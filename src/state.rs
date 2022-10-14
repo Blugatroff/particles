@@ -1,8 +1,3 @@
-const SCALE: f32 = 0.001;
-const RANGE: i32 = 10;
-const BOOMPOWER: f32 = 1.0;
-const MAXFRAMETIME: f32 = 1.0 / 60.0;
-
 use std::{num::NonZeroU64, sync::Arc};
 
 use super::*;
@@ -95,6 +90,8 @@ struct PipePackageMass {
     instances: Vec<Mass>,
 }
 
+type Job = Box<dyn FnOnce(&mut CommandEncoder)>;
+
 #[allow(dead_code)]
 pub struct State {
     surface: wgpu::Surface,
@@ -117,7 +114,7 @@ pub struct State {
     growing: bool,
     compute_pipeline: wgpu::ComputePipeline,
     suspend_updates: bool,
-    jobs: Vec<Box<dyn FnOnce(&mut CommandEncoder)>>,
+    jobs: Vec<Job>,
     frame: u32,
     rng: rand::rngs::ThreadRng,
 }
@@ -499,7 +496,7 @@ impl State {
                         self.uniforms.reset = 1;
                     }
                     (ElementState::Pressed, Some(VirtualKeyCode::B)) => {
-                        self.uniforms.push = 0.1;
+                        self.uniforms.push = 1.0;
                     }
                     (state, Some(VirtualKeyCode::P)) => {
                         self.print = *state == ElementState::Pressed;

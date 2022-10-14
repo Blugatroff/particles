@@ -45,4 +45,3 @@ var sampl: sampler;
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     return textureSample(texture, sampl, in.tex_coords);
 }
-
