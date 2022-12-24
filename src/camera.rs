@@ -1,4 +1,3 @@
-use winit::event::*;
 use super::*;
 
 #[rustfmt::skip]
@@ -89,8 +88,7 @@ impl Camera {
         if self.controller.look_down  { self.controller.pitch   -= self.controller.key_sensitivity * delta_time ; }
         if self.controller.look_up    { self.controller.pitch   += self.controller.key_sensitivity * delta_time ; }
 
-        let clamp = |x: &mut f32, min: f32, max: f32| { if *x < min { *x = min } else if *x > max { *x = max } };
-        clamp(&mut self.controller.pitch, -std::f32::consts::PI / 2.0, std::f32::consts::PI  / 2.0);
+        self.controller.pitch = self.controller.pitch.clamp(-std::f32::consts::PI / 2.0, std::f32::consts::PI  / 2.0);
 
         let direction = cgmath::Vector3::new(
             self.controller.pitch.cos() * self.controller.heading.sin(),
@@ -108,21 +106,22 @@ impl Camera {
             (self.controller.heading - std::f32::consts::PI / 2.0).cos()
         ).normalize();
 
-        if self.controller.forward  { 
+        if self.controller.forward {
             self.eye += plane_direction * delta_time * self.controller.speed;
         }
-        if self.controller.backward { 
+        if self.controller.backward {
             self.eye -= plane_direction * delta_time * self.controller.speed;
         }
-        if self.controller.right  { 
+        if self.controller.right {
             self.eye += right * delta_time * self.controller.speed;
         }
-        if self.controller.left { 
+        if self.controller.left {
             self.eye -= right * delta_time * self.controller.speed;
         }
 
         self.target = self.eye + direction;
     }
+    #[rustfmt::skip]
     pub fn process_events(&mut self, event: &WindowEvent){
         if let WindowEvent::KeyboardInput { input, .. } = event { let KeyboardInput {
                 virtual_keycode,

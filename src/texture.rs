@@ -1,20 +1,20 @@
+use anyhow::*;
+use std::{num::NonZeroU32, path::Path};
+
 pub struct Texture {
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
     pub sampler: wgpu::Sampler,
 }
-use anyhow::*;
-use std::{path::Path, num::NonZeroU32};
+
 impl Texture {
     pub fn load<P: AsRef<Path>>(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         path: P,
     ) -> Result<Self> {
-        // Needed to appease the borrow checker
         let path_copy = path.as_ref().to_path_buf();
         let label = path_copy.to_str();
-        println!("{:?}", label);
         let img = match image::open(path) {
             Result::Ok(img) => img,
             Result::Err(_) => create_colored([255, 255, 255, 255]),
@@ -80,8 +80,8 @@ impl Texture {
             rgba,
             wgpu::ImageDataLayout {
                 offset: 0,
-                bytes_per_row: NonZeroU32::new((4 * dimensions.0) as u32),
-                rows_per_image: NonZeroU32::new((dimensions.1) as u32),
+                bytes_per_row: NonZeroU32::new(4 * dimensions.0),
+                rows_per_image: NonZeroU32::new(dimensions.1),
             },
             size,
         );
@@ -149,7 +149,7 @@ impl Texture {
         }
     }
 }
-#[allow(dead_code)]
+
 pub fn create_colored(color: [u8; 4]) -> image::DynamicImage {
     let mut texture: image::ImageBuffer<image::Rgba<u8>, Vec<u8>> = image::ImageBuffer::new(2, 2);
     for pixel in texture.enumerate_pixels_mut() {

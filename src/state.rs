@@ -137,9 +137,7 @@ impl State {
                 &wgpu::DeviceDescriptor {
                     features: wgpu::Features::VERTEX_WRITABLE_STORAGE,
                     limits: wgpu::Limits {
-                        max_storage_buffer_binding_size: dbg!(
-                            limits.max_storage_buffer_binding_size
-                        ),
+                        max_storage_buffer_binding_size: limits.max_storage_buffer_binding_size,
                         ..Default::default()
                     },
                     label: None,
@@ -588,9 +586,9 @@ impl State {
             });
         self.jobs.push(Box::new(move |encoder| {
             encoder.copy_buffer_to_buffer(
-                &*old_buffer,
+                &old_buffer,
                 0,
-                &*new_buffer,
+                &new_buffer,
                 0,
                 (min_size as u64).min(old_buffer.size()),
             );
