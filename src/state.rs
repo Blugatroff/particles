@@ -120,8 +120,11 @@ pub struct State {
 }
 impl State {
     pub async fn new(window: &Window, particle_number: i32, g: f32) -> Result<Self> {
-        let instance = wgpu::Instance::new(wgpu::Backends::PRIMARY);
-        let surface = unsafe { instance.create_surface(window) };
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::PRIMARY,
+            dx12_shader_compiler: Default::default(),
+        });
+        let surface = unsafe { instance.create_surface(window) }?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
@@ -147,15 +150,22 @@ impl State {
             .await
             .unwrap();
         let window_size = window.inner_size();
-        let supported_formats = surface.get_supported_formats(&adapter);
-        let supported_alpha_modes = surface.get_supported_alpha_modes(&adapter);
+        let surface_capabilities = surface.get_capabilities(&adapter);
+        let supported_formats = surface_capabilities.formats;
+        let supported_alpha_modes = surface_capabilities.alpha_modes;
+        let format = if supported_formats.contains(&wgpu::TextureFormat::Bgra8UnormSrgb) {
+            wgpu::TextureFormat::Bgra8UnormSrgb
+        } else {
+            supported_formats[0]
+        };
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: supported_formats[0],
+            format,
             width: window_size.width,
             height: window_size.height,
             present_mode: wgpu::PresentMode::Immediate,
             alpha_mode: supported_alpha_modes[0],
+            view_formats: vec![format],
         };
         surface.configure(&device, &surface_config);
 

@@ -25,7 +25,7 @@ fn main() -> Result<()> {
     let num = {
         if args.len() > 1 {
             let num = args[1].parse::<i32>();
-            println!("{:?}", num);
+            println!("{num:?}");
             num.unwrap_or(1000)
         } else {
             1000
@@ -34,7 +34,7 @@ fn main() -> Result<()> {
     let g = {
         if args.len() > 2 {
             let g = args[2].parse::<f32>();
-            println!("{:?}", g);
+            println!("{g:?}");
             g.unwrap_or(1.0)
         } else {
             1.0
