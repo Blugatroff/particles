@@ -40,7 +40,10 @@
             dlopenLibs = with pkgs; [
                 vulkan-loader
             ];
-            shellHook = "export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${pkgs.lib.makeLibraryPath dlopenLibs}";
+            shellHook = "
+              export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${pkgs.lib.makeLibraryPath dlopenLibs}
+              export PATH=$PATH:$HOME/.cargo/bin
+            ";
         in {
             devShells.${system}.default = pkgs.mkShell {
                 inherit nativeBuildInputs shellHook;

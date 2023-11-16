@@ -36,9 +36,7 @@ impl Texture {
             image::DynamicImage::ImageLumaA16(_) => "lumaA16",
             image::DynamicImage::ImageRgb8(_) => "rgb8",
             image::DynamicImage::ImageRgb16(_) => "rgba16",
-            image::DynamicImage::ImageBgr8(_) => "bgr8",
-            image::DynamicImage::ImageBgra8(_) => "bgra8",
-            _ => "",
+            _ => "TODO",
         };
         let start = std::time::Instant::now();
         let img = img.clone().into_rgba8();

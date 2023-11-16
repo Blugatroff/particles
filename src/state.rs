@@ -117,12 +117,15 @@ pub struct State {
     jobs: Vec<Job>,
     frame: u32,
     rng: rand::rngs::ThreadRng,
+    random_buffer: wgpu::Buffer,
 }
 impl State {
     pub async fn new(window: &Window, particle_number: i32, g: f32) -> Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             dx12_shader_compiler: Default::default(),
+            flags: wgpu::InstanceFlags::default(),
+            gles_minor_version: wgpu::Gles3MinorVersion::Automatic,
         });
         let surface = unsafe { instance.create_surface(window) }?;
         let adapter = instance
@@ -254,31 +257,60 @@ impl State {
             mapped_at_creation: false,
         });
 
+        let random_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Random Buffer"),
+            size: 8 + (1024 * std::mem::size_of::<f32>()) as u64,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
+
         let instance_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        min_binding_size: None,
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            min_binding_size: None,
+                            ty: wgpu::BufferBindingType::Storage { read_only: false },
+                            has_dynamic_offset: false,
+                        },
+                        count: None,
                     },
-                    count: None,
-                }],
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
                 label: Some("instance_bind_group_layout"),
             });
 
         let instance_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &instance_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &instance_buffer,
-                    offset: 0,
-                    size: None,
-                }),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &instance_buffer,
+                        offset: 0,
+                        size: None,
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &random_buffer,
+                        offset: 0,
+                        size: None,
+                    }),
+                },
+            ],
             label: Some("instance_bind_group"),
         });
         let instances_binding = Binding {
@@ -452,6 +484,7 @@ impl State {
             compute_pipeline,
             suspend_updates: false,
             jobs: Vec::new(),
+            random_buffer,
         })
     }
 
@@ -585,14 +618,24 @@ impl State {
             self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("particles bind group"),
                 layout: &self.particles.binding.bind_group_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &self.particles.binding.buffer,
-                        offset: 0,
-                        size: None,
-                    }),
-                }],
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &self.particles.binding.buffer,
+                            offset: 0,
+                            size: None,
+                        }),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &self.random_buffer,
+                            offset: 0,
+                            size: None,
+                        }),
+                    },
+                ],
             });
         self.jobs.push(Box::new(move |encoder| {
             encoder.copy_buffer_to_buffer(
@@ -618,6 +661,7 @@ impl State {
         {
             let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("compute pass"),
+                timestamp_writes: None,
             });
             compute_pass.set_pipeline(&self.compute_pipeline);
             compute_pass.set_bind_group(0, &self.uniform_binding.bind_group, &[]);
@@ -632,18 +676,20 @@ impl State {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: true,
+                        store: wgpu::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth_texture.view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
-                        store: true,
+                        store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
                 }),
                 label: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
             });
             render_pass.set_pipeline(&self.particles.pipeline);
             for mesh in &self.particles.model.meshes {
