@@ -1,10 +1,6 @@
 use futures::executor::block_on;
 use wgpu::util::DeviceExt;
-use winit::{
-    event::*,
-    event_loop::{ControlFlow, EventLoop},
-    window::WindowBuilder,
-};
+use winit::{event::*, event_loop::EventLoop, window::WindowBuilder};
 mod camera;
 use camera::*;
 mod state;
@@ -13,14 +9,14 @@ use anyhow::*;
 use cgmath::prelude::*;
 use cgmath::SquareMatrix;
 use state::*;
-use std::env;
+use std::{env, sync::Arc};
 mod model;
 fn main() -> Result<()> {
     env_logger::init();
     let args: Vec<String> = env::args().collect();
 
-    let event_loop = EventLoop::new();
-    let window = WindowBuilder::new().build(&event_loop)?;
+    let event_loop = EventLoop::new()?;
+    let window = Arc::new(WindowBuilder::new().build(&event_loop)?);
     let mut is_focused = true;
     let num = {
         if args.len() > 1 {
@@ -41,13 +37,13 @@ fn main() -> Result<()> {
         }
     };
     // Since main can't be async, we're going to need to block
-    let mut state = block_on(State::new(&window, num, g * 100000.0))?;
+    let mut state = block_on(State::new(window.clone(), num, g * 100000.0))?;
     window
         .set_cursor_grab(winit::window::CursorGrabMode::Confined)
         .ok();
     window.set_cursor_visible(false);
     window.set_title("particles");
-    event_loop.run(move |event, _, control_flow| match event {
+    event_loop.run(move |event, elwt| match event {
         Event::WindowEvent {
             ref event,
             window_id,
@@ -68,40 +64,28 @@ fn main() -> Result<()> {
                             .unwrap();
                         is_focused = false;
                     }
-                    WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
-                    WindowEvent::KeyboardInput {
-                        input:
-                            KeyboardInput {
-                                state: ElementState::Pressed,
-                                virtual_keycode: Some(VirtualKeyCode::Escape),
-                                ..
-                            },
-                        ..
-                    } => *control_flow = ControlFlow::Exit,
+                    WindowEvent::CloseRequested => elwt.exit(),
                     WindowEvent::Resized(physical_size) => {
                         state.resize(*physical_size);
                     }
-                    WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
-                        state.resize(**new_inner_size);
+                    WindowEvent::RedrawRequested => {
+                        state.update();
+                        state.render();
+                        window.pre_present_notify();
                     }
                     _ => {}
                 }
             }
-        }
-        Event::RedrawRequested(_) => {
-            state.update();
-            state.render();
-        }
-        Event::MainEventsCleared => {
-            // RedrawRequested will only trigger once, unless we manually
-            // request it.
-            window.request_redraw();
         }
         Event::DeviceEvent { event, .. } => {
             if is_focused {
                 state.device_input(&event);
             }
         }
+        Event::AboutToWait => {
+            window.request_redraw();
+        }
         _ => {}
-    });
+    })?;
+    Ok(())
 }

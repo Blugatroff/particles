@@ -4,8 +4,11 @@ use super::*;
 use anyhow::*;
 use model::*;
 use rand::Rng;
-use wgpu::{util::DrawIndexedIndirect, CommandEncoder};
-use winit::window::Window;
+use wgpu::{util::DrawIndexedIndirectArgs, CommandEncoder};
+use winit::{
+    keyboard::{KeyCode, PhysicalKey},
+    window::Window,
+};
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -94,7 +97,7 @@ type Job = Box<dyn FnOnce(&mut CommandEncoder)>;
 
 #[allow(dead_code)]
 pub struct State {
-    surface: wgpu::Surface,
+    surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     surface_config: wgpu::SurfaceConfiguration,
@@ -120,14 +123,14 @@ pub struct State {
     random_buffer: wgpu::Buffer,
 }
 impl State {
-    pub async fn new(window: &Window, particle_number: i32, g: f32) -> Result<Self> {
+    pub async fn new(window: Arc<Window>, particle_number: i32, g: f32) -> Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             dx12_shader_compiler: Default::default(),
             flags: wgpu::InstanceFlags::default(),
             gles_minor_version: wgpu::Gles3MinorVersion::Automatic,
         });
-        let surface = unsafe { instance.create_surface(window) }?;
+        let surface = instance.create_surface(window.clone())?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
@@ -141,8 +144,8 @@ impl State {
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
-                    features: wgpu::Features::VERTEX_WRITABLE_STORAGE,
-                    limits: wgpu::Limits {
+                    required_features: wgpu::Features::VERTEX_WRITABLE_STORAGE,
+                    required_limits: wgpu::Limits {
                         max_storage_buffer_binding_size: limits.max_storage_buffer_binding_size,
                         ..Default::default()
                     },
@@ -169,6 +172,7 @@ impl State {
             present_mode: wgpu::PresentMode::Immediate,
             alpha_mode: supported_alpha_modes[0],
             view_formats: vec![format],
+            desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &surface_config);
 
@@ -429,7 +433,7 @@ impl State {
         );
         let indirect_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("indirect_buffer"),
-            size: std::mem::size_of::<DrawIndexedIndirect>() as u64,
+            size: std::mem::size_of::<DrawIndexedIndirectArgs>() as u64,
             usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
@@ -511,36 +515,31 @@ impl State {
     pub fn input(&mut self, event: &WindowEvent) -> bool {
         self.camera.process_events(event);
         match event {
-            WindowEvent::KeyboardInput { input, .. } => {
-                let KeyboardInput {
-                    virtual_keycode,
-                    state,
-                    ..
-                } = input;
-                match (state, virtual_keycode) {
-                    (ElementState::Pressed, Some(VirtualKeyCode::C)) => {
+            WindowEvent::KeyboardInput { event, .. } => {
+                match (event.state, event.physical_key) {
+                    (ElementState::Pressed, PhysicalKey::Code(KeyCode::KeyC)) => {
                         self.camera.reset();
                     }
-                    (ElementState::Pressed, Some(VirtualKeyCode::U)) => {
+                    (ElementState::Pressed, PhysicalKey::Code(KeyCode::KeyU)) => {
                         self.suspend_updates = !self.suspend_updates;
                     }
-                    (ElementState::Pressed, Some(VirtualKeyCode::NumpadAdd)) => {
+                    (ElementState::Pressed, PhysicalKey::Code(KeyCode::NumpadAdd)) => {
                         self.g *= 1.05;
                     }
-                    (ElementState::Pressed, Some(VirtualKeyCode::NumpadSubtract)) => {
+                    (ElementState::Pressed, PhysicalKey::Code(KeyCode::NumpadSubtract)) => {
                         self.g *= 0.95;
                     }
-                    (ElementState::Pressed, Some(VirtualKeyCode::G)) => {
+                    (ElementState::Pressed, PhysicalKey::Code(KeyCode::KeyG)) => {
                         self.growing = !self.growing;
                     }
-                    (ElementState::Pressed, Some(VirtualKeyCode::R)) => {
+                    (ElementState::Pressed, PhysicalKey::Code(KeyCode::KeyR)) => {
                         self.uniforms.reset = 1;
                     }
-                    (ElementState::Pressed, Some(VirtualKeyCode::B)) => {
+                    (ElementState::Pressed, PhysicalKey::Code(KeyCode::KeyB)) => {
                         self.uniforms.push = 1.0;
                     }
-                    (state, Some(VirtualKeyCode::P)) => {
-                        self.print = *state == ElementState::Pressed;
+                    (state, PhysicalKey::Code(KeyCode::KeyP)) => {
+                        self.print = state == ElementState::Pressed;
                     }
                     _ => {}
                 };
@@ -700,7 +699,7 @@ impl State {
                 render_pass.set_bind_group(0, &material.bind_group, &[]);
                 render_pass.set_bind_group(1, &self.uniform_binding.bind_group, &[]);
                 render_pass.set_bind_group(2, &self.particles.binding.bind_group, &[]);
-                //render_pass.draw_indexed_indirect(&self.indirect_buffer, 0);
+                // render_pass.draw_indexed_indirect(&self.indirect_buffer, 0);
                 render_pass.draw_indexed(0..mesh.num_elements, 0, 0..self.uniforms.n_particles);
             }
             render_pass.set_pipeline(&self.masses.pipeline);

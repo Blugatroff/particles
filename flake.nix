@@ -31,7 +31,6 @@
                 xorg.libXi
 
                 vulkan-headers
-                vulkan-loader
                 vulkan-validation-layers
 
                 rust-analyzer
@@ -39,6 +38,7 @@
 
             dlopenLibs = with pkgs; [
                 vulkan-loader
+                libxkbcommon
             ];
             shellHook = "
               export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${pkgs.lib.makeLibraryPath dlopenLibs}

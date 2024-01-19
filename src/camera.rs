@@ -1,3 +1,5 @@
+use winit::keyboard::{PhysicalKey, KeyCode};
+
 use super::*;
 
 #[rustfmt::skip]
@@ -123,35 +125,32 @@ impl Camera {
     }
     #[rustfmt::skip]
     pub fn process_events(&mut self, event: &WindowEvent){
-        if let WindowEvent::KeyboardInput { input, .. } = event { let KeyboardInput {
-                virtual_keycode,
-                state,
-                ..
-            } = input;
-        match (state, virtual_keycode) {
-            (ElementState::Pressed , Some(VirtualKeyCode::D       ))  => { self.controller.right      = true ; }
-            (ElementState::Released, Some(VirtualKeyCode::D       ))  => { self.controller.right      = false; }
-            (ElementState::Pressed , Some(VirtualKeyCode::A       ))  => { self.controller.left       = true ; }
-            (ElementState::Released, Some(VirtualKeyCode::A       ))  => { self.controller.left       = false; }
-            (ElementState::Pressed , Some(VirtualKeyCode::LControl))  => { self.controller.down       = true ; }
-            (ElementState::Released, Some(VirtualKeyCode::LControl))  => { self.controller.down       = false; }
-            (ElementState::Pressed , Some(VirtualKeyCode::Space   ))  => { self.controller.up         = true ; }
-            (ElementState::Released, Some(VirtualKeyCode::Space   ))  => { self.controller.up         = false; }
-            (ElementState::Pressed , Some(VirtualKeyCode::W       ))  => { self.controller.forward    = true ; }
-            (ElementState::Released, Some(VirtualKeyCode::W       ))  => { self.controller.forward    = false; }
-            (ElementState::Pressed , Some(VirtualKeyCode::S       ))  => { self.controller.backward   = true ; }
-            (ElementState::Released, Some(VirtualKeyCode::S       ))  => { self.controller.backward   = false; }
-            (ElementState::Pressed , Some(VirtualKeyCode::Left    ))  => { self.controller.look_right = true ; }
-            (ElementState::Released, Some(VirtualKeyCode::Left    ))  => { self.controller.look_right = false; }
-            (ElementState::Pressed , Some(VirtualKeyCode::Right   ))  => { self.controller.look_left  = true ; }
-            (ElementState::Released, Some(VirtualKeyCode::Right   ))  => { self.controller.look_left  = false; }
-            (ElementState::Pressed , Some(VirtualKeyCode::Down    ))  => { self.controller.look_down  = true ; }
-            (ElementState::Released, Some(VirtualKeyCode::Down    ))  => { self.controller.look_down  = false; }
-            (ElementState::Pressed , Some(VirtualKeyCode::Up      ))  => { self.controller.look_up    = true ; }
-            (ElementState::Released, Some(VirtualKeyCode::Up      ))  => { self.controller.look_up    = false; }
-            (ElementState::Pressed , Some(VirtualKeyCode::LShift  ))  => { self.controller.speed     *= 2.0  ; }
-            (ElementState::Released, Some(VirtualKeyCode::LShift  ))  => { self.controller.speed     /= 2.0  ; }
-            _ => {}
-        }; }
+        if let WindowEvent::KeyboardInput { event, .. } = event { 
+            match (event.state, event.physical_key) {
+                (ElementState::Pressed , PhysicalKey::Code(KeyCode::KeyD))  => { self.controller.right      = true ; }
+                (ElementState::Released, PhysicalKey::Code(KeyCode::KeyD))  => { self.controller.right      = false; }
+                (ElementState::Pressed , PhysicalKey::Code(KeyCode::KeyA))  => { self.controller.left       = true ; }
+                (ElementState::Released, PhysicalKey::Code(KeyCode::KeyA))  => { self.controller.left       = false; }
+                (ElementState::Pressed , PhysicalKey::Code(KeyCode::ControlLeft))  => { self.controller.down       = true ; }
+                (ElementState::Released, PhysicalKey::Code(KeyCode::ControlLeft))  => { self.controller.down       = false; }
+                (ElementState::Pressed , PhysicalKey::Code(KeyCode::Space))  => { self.controller.up         = true ; }
+                (ElementState::Released, PhysicalKey::Code(KeyCode::Space))  => { self.controller.up         = false; }
+                (ElementState::Pressed , PhysicalKey::Code(KeyCode::KeyW))  => { self.controller.forward    = true ; }
+                (ElementState::Released, PhysicalKey::Code(KeyCode::KeyW))  => { self.controller.forward    = false; }
+                (ElementState::Pressed , PhysicalKey::Code(KeyCode::KeyS))  => { self.controller.backward   = true ; }
+                (ElementState::Released, PhysicalKey::Code(KeyCode::KeyS))  => { self.controller.backward   = false; }
+                (ElementState::Pressed , PhysicalKey::Code(KeyCode::ArrowLeft))  => { self.controller.look_right = true ; }
+                (ElementState::Released, PhysicalKey::Code(KeyCode::ArrowLeft))  => { self.controller.look_right = false; }
+                (ElementState::Pressed , PhysicalKey::Code(KeyCode::ArrowRight))  => { self.controller.look_left  = true ; }
+                (ElementState::Released, PhysicalKey::Code(KeyCode::ArrowRight))  => { self.controller.look_left  = false; }
+                (ElementState::Pressed , PhysicalKey::Code(KeyCode::ArrowDown))  => { self.controller.look_down  = true ; }
+                (ElementState::Released, PhysicalKey::Code(KeyCode::ArrowDown))  => { self.controller.look_down  = false; }
+                (ElementState::Pressed , PhysicalKey::Code(KeyCode::ArrowUp))  => { self.controller.look_up    = true ; }
+                (ElementState::Released, PhysicalKey::Code(KeyCode::ArrowUp))  => { self.controller.look_up    = false; }
+                (ElementState::Pressed , PhysicalKey::Code(KeyCode::ShiftLeft))  => { self.controller.speed     *= 2.0  ; }
+                (ElementState::Released, PhysicalKey::Code(KeyCode::ShiftLeft))  => { self.controller.speed     /= 2.0  ; }
+                _ => {}
+            };
+        }
     }
 }
