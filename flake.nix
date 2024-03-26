@@ -1,9 +1,8 @@
 {
     inputs = {
-        nixpkgs.url = "github:NixOS/nixpkgs/nixos-23.05";
+        nixpkgs.url = "github:NixOS/nixpkgs/nixos-23.11";
         flake-utils = {
             url = "github:numtide/flake-utils";
-            inputs.nixpkgs.follows = "nixpkgs";
         };
         rust-overlay = {
             url = "github:oxalica/rust-overlay";
@@ -35,10 +34,11 @@
 
                 rust-analyzer
             ];
-
+            buildInputs = [ ];
             dlopenLibs = with pkgs; [
                 vulkan-loader
                 libxkbcommon
+                pkgs.wayland
             ];
             shellHook = "
               export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:${pkgs.lib.makeLibraryPath dlopenLibs}
@@ -46,8 +46,8 @@
             ";
         in {
             devShells.${system}.default = pkgs.mkShell {
-                inherit nativeBuildInputs shellHook;
-                buildInputs = [  ];
+                inherit buildInputs nativeBuildInputs shellHook;
+                # LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath buildInputs}";
                 # VULKAN_SDK = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";
             };
         };

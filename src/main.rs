@@ -71,7 +71,6 @@ fn main() -> Result<()> {
                     WindowEvent::RedrawRequested => {
                         state.update();
                         state.render();
-                        window.pre_present_notify();
                     }
                     _ => {}
                 }

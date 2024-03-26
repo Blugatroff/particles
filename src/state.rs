@@ -97,6 +97,7 @@ type Job = Box<dyn FnOnce(&mut CommandEncoder)>;
 
 #[allow(dead_code)]
 pub struct State {
+    window: Arc<Window>,
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -169,7 +170,7 @@ impl State {
             format,
             width: window_size.width,
             height: window_size.height,
-            present_mode: wgpu::PresentMode::Immediate,
+            present_mode: wgpu::PresentMode::Mailbox,
             alpha_mode: supported_alpha_modes[0],
             view_formats: vec![format],
             desired_maximum_frame_latency: 2,
@@ -456,6 +457,7 @@ impl State {
             entry_point: "main",
         });
         Ok(Self {
+            window,
             rng: rand::thread_rng(),
             frame: 0,
             print: false,
@@ -719,6 +721,7 @@ impl State {
             }
         }
         self.queue.submit(Some(encoder.finish()));
+        self.window.pre_present_notify();
         frame.present();
     }
 }
