@@ -151,6 +151,7 @@ impl State {
                         ..Default::default()
                     },
                     label: None,
+                    memory_hints: wgpu::MemoryHints::Performance,
                 },
                 None,
             )
@@ -170,7 +171,19 @@ impl State {
             format,
             width: window_size.width,
             height: window_size.height,
-            present_mode: wgpu::PresentMode::Mailbox,
+            present_mode: if surface_capabilities
+                .present_modes
+                .contains(&wgpu::PresentMode::Mailbox)
+            {
+                wgpu::PresentMode::Mailbox
+            } else if surface_capabilities
+                .present_modes
+                .contains(&wgpu::PresentMode::Immediate)
+            {
+                wgpu::PresentMode::Immediate
+            } else {
+                wgpu::PresentMode::Fifo
+            },
             alpha_mode: supported_alpha_modes[0],
             view_formats: vec![format],
             desired_maximum_frame_latency: 2,
@@ -455,6 +468,8 @@ impl State {
             layout: Some(&compute_pipeline_layout),
             module: &compute_shader,
             entry_point: "main",
+            compilation_options: Default::default(),
+            cache: None,
         });
         Ok(Self {
             window,
@@ -591,7 +606,7 @@ impl State {
         let data = bytemuck::cast_slice(data);
         self.queue
             .write_buffer(&self.uniform_binding.buffer, 0, data);
-        self.uniforms.n_particles = self.uniforms.n_particles_requested;
+        self.uniforms.n_particles = self.uniforms.n_particles_requested.min(self.uniforms.n_particles + 256);
         self.uniforms.reset = 0;
         self.uniforms.push = 0.0;
         self.uniforms.frame += 1;
@@ -741,11 +756,19 @@ fn create_render_pipeline(
             module: vs_module,
             entry_point: "vs_main",
             buffers: vertex_buffer_layouts,
+            compilation_options: wgpu::PipelineCompilationOptions {
+                zero_initialize_workgroup_memory: false,
+                ..Default::default()
+            },
         },
         fragment: Some(wgpu::FragmentState {
             targets: color_targets,
             module: fs_module,
             entry_point: "fs_main",
+            compilation_options: wgpu::PipelineCompilationOptions {
+                zero_initialize_workgroup_memory: false,
+                ..Default::default()
+            },
         }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
@@ -769,5 +792,6 @@ fn create_render_pipeline(
             alpha_to_coverage_enabled: false,
         },
         multiview: None,
+        cache: None,
     })
 }
