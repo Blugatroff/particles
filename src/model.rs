@@ -46,14 +46,12 @@ impl PartialEq for Vertex {
 
 unsafe impl bytemuck::Pod for Vertex {}
 unsafe impl bytemuck::Zeroable for Vertex {}
+
 pub struct Material {
-    pub name: String,
-    pub diffuse_texture: texture::Texture,
     pub bind_group: wgpu::BindGroup,
 }
 
 pub struct Mesh {
-    pub name: String,
     pub vertex_buffer: wgpu::Buffer,
     pub index_buffer: wgpu::Buffer,
     pub num_elements: u32,
@@ -98,11 +96,7 @@ impl Model {
                 label: None,
             });
 
-            materials.push(Material {
-                name: mat.name,
-                diffuse_texture,
-                bind_group,
-            });
+            materials.push(Material { bind_group });
         }
 
         let mut meshes = Vec::new();
@@ -136,7 +130,6 @@ impl Model {
             });
 
             meshes.push(Mesh {
-                name: m.name,
                 vertex_buffer,
                 index_buffer,
                 num_elements: m.mesh.indices.len() as u32,

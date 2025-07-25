@@ -125,11 +125,23 @@ pub struct State {
 }
 impl State {
     pub async fn new(window: Arc<Window>, particle_number: i32, g: f32) -> Result<Self> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
-            dx12_shader_compiler: Default::default(),
             flags: wgpu::InstanceFlags::default(),
-            gles_minor_version: wgpu::Gles3MinorVersion::Automatic,
+            backend_options: wgpu::BackendOptions {
+                gl: wgpu::GlBackendOptions {
+                    gles_minor_version: wgpu::Gles3MinorVersion::Automatic,
+                    fence_behavior: wgpu::GlFenceBehavior::default(),
+                },
+                dx12: wgpu::Dx12BackendOptions {
+                    shader_compiler: Default::default(),
+                },
+                noop: wgpu::NoopBackendOptions { enable: false },
+            },
+            memory_budget_thresholds: wgpu::MemoryBudgetThresholds {
+                for_resource_creation: None,
+                for_device_loss: Some(90),
+            },
         });
         let surface = instance.create_surface(window.clone())?;
         let adapter = instance
@@ -143,18 +155,16 @@ impl State {
 
         let limits = adapter.limits();
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    required_features: wgpu::Features::VERTEX_WRITABLE_STORAGE,
-                    required_limits: wgpu::Limits {
-                        max_storage_buffer_binding_size: limits.max_storage_buffer_binding_size,
-                        ..Default::default()
-                    },
-                    label: None,
-                    memory_hints: wgpu::MemoryHints::Performance,
+            .request_device(&wgpu::DeviceDescriptor {
+                required_features: wgpu::Features::VERTEX_WRITABLE_STORAGE,
+                required_limits: wgpu::Limits {
+                    max_storage_buffer_binding_size: limits.max_storage_buffer_binding_size,
+                    ..Default::default()
                 },
-                None,
-            )
+                label: None,
+                memory_hints: wgpu::MemoryHints::Performance,
+                trace: wgpu::Trace::Off,
+            })
             .await
             .unwrap();
         let window_size = window.inner_size();
@@ -467,7 +477,7 @@ impl State {
             label: Some("compute pipeline"),
             layout: Some(&compute_pipeline_layout),
             module: &compute_shader,
-            entry_point: "main",
+            entry_point: Some("main"),
             compilation_options: Default::default(),
             cache: None,
         });
@@ -606,7 +616,10 @@ impl State {
         let data = bytemuck::cast_slice(data);
         self.queue
             .write_buffer(&self.uniform_binding.buffer, 0, data);
-        self.uniforms.n_particles = self.uniforms.n_particles_requested.min(self.uniforms.n_particles + 256);
+        self.uniforms.n_particles = self
+            .uniforms
+            .n_particles_requested
+            .min(self.uniforms.n_particles + 256);
         self.uniforms.reset = 0;
         self.uniforms.push = 0.0;
         self.uniforms.frame += 1;
@@ -694,6 +707,7 @@ impl State {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
                     },
+                    depth_slice: None,
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth_texture.view,
@@ -754,7 +768,7 @@ fn create_render_pipeline(
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: vs_module,
-            entry_point: "vs_main",
+            entry_point: Some("vs_main"),
             buffers: vertex_buffer_layouts,
             compilation_options: wgpu::PipelineCompilationOptions {
                 zero_initialize_workgroup_memory: false,
@@ -764,7 +778,7 @@ fn create_render_pipeline(
         fragment: Some(wgpu::FragmentState {
             targets: color_targets,
             module: fs_module,
-            entry_point: "fs_main",
+            entry_point: Some("fs_main"),
             compilation_options: wgpu::PipelineCompilationOptions {
                 zero_initialize_workgroup_memory: false,
                 ..Default::default()
